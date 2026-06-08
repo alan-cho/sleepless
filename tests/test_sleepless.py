@@ -420,3 +420,166 @@ def test_shutdown_revert_sets_off():
     a.flag = True
     c.shutdown_revert()
     assert (0, False) in a.set_calls
+
+
+def test_config_auto_when_plugged_roundtrip(tmp_path):
+    p = tmp_path / "config.json"
+    S.save_config(S.Config(auto_when_plugged=True), p)
+    assert S.load_config(p).auto_when_plugged is True
+
+
+def test_config_auto_when_plugged_default_false():
+    assert S.Config().sanitized().auto_when_plugged is False
+
+
+def test_auto_does_not_engage_when_pref_off():
+    c, a, _ = make_controller()
+    a.plugged = True
+    a.flag = False
+    c.tick()
+    assert a.flag is False
+    assert c.state.enabled is False
+
+
+def test_auto_engages_on_ac_when_armed():
+    c, a, _ = make_controller()
+    c.config = cfg(auto_when_plugged=True)
+    a.plugged = True
+    a.flag = False
+    c.tick()
+    assert a.flag is True
+    assert c.state.enabled is True
+    assert c.state.engaged_by_auto is True
+    assert c.state.awake_until is None
+
+
+def test_auto_engage_is_non_interactive():
+    c, a, _ = make_controller()
+    c.config = cfg(auto_when_plugged=True)
+    a.plugged = True
+    c.tick()
+    assert (1, False) in a.set_calls
+    assert (1, True) not in a.set_calls
+
+
+def test_auto_reverts_on_unplug():
+    c, a, _ = make_controller()
+    c.config = cfg(auto_when_plugged=True)
+    a.plugged = True
+    c.tick()
+    assert c.state.enabled is True
+    a.plugged = False
+    c.tick()
+    assert a.flag is False
+    assert c.state.enabled is False
+    assert c.state.engaged_by_auto is False
+
+
+def test_auto_reengages_after_replug():
+    c, a, _ = make_controller()
+    c.config = cfg(auto_when_plugged=True)
+    a.plugged = True
+    c.tick()
+    a.plugged = False
+    c.tick()
+    assert c.state.enabled is False
+    a.plugged = True
+    c.tick()
+    assert c.state.enabled is True
+    assert c.state.engaged_by_auto is True
+
+
+def test_auto_suppressed_after_user_disable():
+    c, a, _ = make_controller()
+    c.config = cfg(auto_when_plugged=True)
+    a.plugged = True
+    c.tick()
+    assert c.state.enabled is True
+    c.request_disable()
+    assert c.state.enabled is False
+    assert c.state.auto_suppressed is True
+    c.tick()
+    assert c.state.enabled is False
+    assert a.flag is False
+
+
+def test_auto_suppression_cleared_on_unplug():
+    c, a, _ = make_controller()
+    c.config = cfg(auto_when_plugged=True)
+    a.plugged = True
+    c.tick()
+    c.request_disable()
+    assert c.state.auto_suppressed is True
+    a.plugged = False
+    c.tick()
+    assert c.state.auto_suppressed is False
+    a.plugged = True
+    c.tick()
+    assert c.state.enabled is True
+
+
+def test_auto_does_not_engage_when_unsafe_then_engages_when_clear():
+    c, a, _ = make_controller()
+    c.config = cfg(auto_when_plugged=True, thermal_guard="auto")
+    a.plugged = True
+    a.thermal = 2
+    c.tick()
+    assert c.state.enabled is False
+    a.thermal = 0
+    c.tick()
+    assert c.state.enabled is True
+
+
+def test_auto_reengages_after_thermal_clears():
+    c, a, _ = make_controller()
+    c.config = cfg(auto_when_plugged=True, thermal_guard="auto")
+    a.plugged = True
+    c.tick()
+    assert c.state.enabled is True
+    a.thermal = 2
+    c.tick()
+    assert c.state.enabled is False
+    assert c.state.awaiting_nominal is True
+    a.thermal = 0
+    c.tick()
+    assert c.state.enabled is True
+    assert c.state.awaiting_nominal is False
+
+
+def test_auto_leaves_manual_battery_session_alone():
+    c, a, _ = make_controller()
+    c.config = cfg(auto_when_plugged=True)
+    a.plugged = False
+    a.percent = 90.0
+    assert c.request_enable() is None
+    assert c.state.enabled is True
+    assert c.state.engaged_by_auto is False
+    c.tick()
+    assert c.state.enabled is True
+    assert a.flag is True
+
+
+def test_auto_unplug_below_floor_attributed_to_battery_floor():
+    c, a, _ = make_controller()
+    c.config = cfg(auto_when_plugged=True, battery_floor_percent=50)
+    a.plugged = True
+    a.percent = 40.0
+    c.tick()
+    assert c.state.enabled is True
+    a.plugged = False
+    c.tick()
+    assert c.state.enabled is False
+    assert c.state.last_revert_reason == "battery floor"
+
+
+def test_auto_unplug_healthy_attributed_to_unplugged():
+    c, a, _ = make_controller()
+    c.config = cfg(auto_when_plugged=True, battery_floor_percent=20)
+    a.plugged = True
+    a.percent = 90.0
+    c.tick()
+    assert c.state.enabled is True
+    a.plugged = False
+    c.tick()
+    assert c.state.enabled is False
+    assert c.state.last_revert_reason == "unplugged"

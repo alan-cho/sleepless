@@ -157,6 +157,7 @@ class Config:
     default_timer_unplugged: str = "1h"
     poll_seconds: int = 60
     thermal_guard: str = "auto"  # auto | warn | off
+    auto_when_plugged: bool = False  # persistent: auto stay-awake whenever on AC power
 
     def sanitized(self) -> "Config":
         """Clamp every field to a safe value (never trust the file on disk)."""
@@ -167,7 +168,8 @@ class Config:
         tp = self.default_timer_plugged if self.default_timer_plugged in DURATIONS else "indefinite"
         tu = self.default_timer_unplugged if self.default_timer_unplugged in DURATIONS else "1h"
         tg = self.thermal_guard if self.thermal_guard in ("auto", "warn", "off") else "auto"
-        return Config(floor, tp, tu, poll, tg)
+        awp = bool(self.auto_when_plugged)
+        return Config(floor, tp, tu, poll, tg, awp)
 
 
 def _as_int(value: object, default: int) -> int:
@@ -360,6 +362,8 @@ class State:
     awaiting_nominal: bool = False       # thermal hysteresis lockout
     thermal_warned: bool = False         # de-dupe "warn"-mode notifications
     last_revert_reason: Optional[str] = None
+    engaged_by_auto: bool = False        # current enable came from auto-when-plugged
+    auto_suppressed: bool = False        # user turned it off while plugged; wait for unplug
 
 
 # ============================================================================
@@ -482,14 +486,23 @@ class Controller:
         read_ok, disabled = self.adapter.read_sleep_disabled()
         return read_ok and (disabled == bool(value))
 
-    def _dispatch(self, fn: Callable[[], None]) -> None:
-        """Run a privileged action, coalescing overlapping requests (single-flight)."""
+    def _dispatch(self, fn: Callable[[], None], *, critical: bool = False) -> None:
+        """Run a privileged action on a worker, single-flight. Reverts are
+        `critical`: they block until any in-flight write finishes rather than being
+        dropped — a revert is never skipped. Enables are best-effort: if a write is
+        already in flight the round is dropped and retried on the next poll."""
         if self._sync:
             if self._write_lock.acquire(blocking=False):
                 try:
                     fn()
                 finally:
                     self._write_lock.release()
+            return
+        if critical:
+            def critical_runner():
+                with self._write_lock:
+                    fn()
+            threading.Thread(target=critical_runner, daemon=True).start()
             return
         if not self._write_lock.acquire(blocking=False):
             return  # a write is already in flight; this round is dropped
@@ -522,32 +535,41 @@ class Controller:
         self._dispatch(lambda: self._apply_enable(key))
         return None
 
-    def _apply_enable(self, duration_key: str) -> None:
-        if self._perform(1, allow_prompt=True):
+    def _apply_enable(self, duration_key: str, *, by_auto: bool = False) -> None:
+        # Auto-engage runs from the poll loop, so it must never pop a GUI prompt.
+        if self._perform(1, allow_prompt=not by_auto):
             self.state.enabled = True
+            self.state.engaged_by_auto = by_auto
             self.state.alarm = False
             self.state.awaiting_nominal = False
             self.state.thermal_warned = False
             secs = DURATIONS[duration_key]
             self.state.awake_until = None if secs is None else self._now() + secs
-            log_event("enabled", duration_key, observed="on")
+            log_event("enabled", "auto" if by_auto else duration_key, observed="on")
         else:
             self.state.enabled = False
-            self.adapter.notify(APP_NAME, "Could not enable",
-                                "pmset refused — is passwordless sudo configured?")
-            log_event("enable-failed", "unconfirmed")
+            self.state.engaged_by_auto = False
+            if not by_auto:  # auto retries every poll; don't spam a banner each time
+                self.adapter.notify(APP_NAME, "Could not enable",
+                                    "pmset refused — is passwordless sudo configured?")
+            log_event("enable-failed", "auto" if by_auto else "unconfirmed")
 
     def request_disable(self) -> None:
-        self._dispatch(lambda: self._apply_off("user", thermal=False))
+        self._dispatch(lambda: self._apply_off("user", thermal=False), critical=True)
 
     def request_revert(self, reason: str) -> None:
-        self._dispatch(lambda: self._apply_off(reason, thermal=reason.startswith("thermal")))
+        self._dispatch(lambda: self._apply_off(reason, thermal=reason.startswith("thermal")),
+                       critical=True)
 
     def _apply_off(self, reason: str, *, thermal: bool) -> None:
         confirmed = self._perform(0, allow_prompt=False)
         self.state.last_revert_reason = reason
+        # A manual "off" suppresses auto re-engage until the user unplugs.
+        if reason == "user":
+            self.state.auto_suppressed = True
         if confirmed:
             self.state.enabled = False
+            self.state.engaged_by_auto = False
             self.state.awake_until = None
             self.state.alarm = False
             self.state.awaiting_nominal = thermal  # block re-enable until Nominal
@@ -557,6 +579,7 @@ class Controller:
         else:
             # Could not confirm the flag is off -> the Mac may still be awake.
             self.state.enabled = False
+            self.state.engaged_by_auto = False
             self.state.alarm = True
             self.adapter.notify(APP_NAME, "REVERT FAILED — still awake?", reason)
             log_event("revert-unconfirmed", reason, observed="ALARM")
@@ -565,17 +588,35 @@ class Controller:
         ok, disabled = self.adapter.read_sleep_disabled()
         return ok and disabled
 
+    # --- auto "stay awake while plugged in" (persistent, opt-in) ---
+    def _auto_reconcile(self, r: Readings) -> None:
+        """Drive the flag from AC power when auto_when_plugged is armed: engage
+        (non-interactively) whenever on AC and safe, revert when unplugged. Manual
+        battery sessions are left alone (engaged_by_auto guards the unplug-revert),
+        and a manual "off" suppresses re-engage until the user unplugs."""
+        on_ac = (r.power_plugged is True)
+        if not on_ac:
+            self.state.auto_suppressed = False  # re-plugging should re-engage
+            if self.state.enabled and self.state.engaged_by_auto:
+                self.request_revert("unplugged")
+            return
+        if self.state.enabled or self.state.auto_suppressed or self.state.awaiting_nominal:
+            return
+        if can_enable(r, self.config, self.state) is None:
+            self._dispatch(lambda: self._apply_enable("indefinite", by_auto=True))
+
     # --- periodic tick (called by the UI timer) ---
     def tick(self) -> Readings:
         """Evaluate guardrails / reconcile. Returns the latest readings so the
         view can refresh labels + glyph. Privileged writes are dispatched."""
         r = self.readings()
         if self.state.alarm:
-            self._dispatch(lambda: self._retry_alarm())
+            self._dispatch(lambda: self._retry_alarm(), critical=True)
             return r
         # Clear the hysteresis lockout once the system is fully Nominal again.
         if self.state.awaiting_nominal and r.thermal_state == 0:
             self.state.awaiting_nominal = False
+        # Guardrails first so a real revert reason wins over the auto-on-AC reconcile.
         if self.state.enabled:
             reason = decide_revert(self.state, r, self.config, self._now())
             if reason:
@@ -587,6 +628,8 @@ class Controller:
                                     "Staying awake — consider turning off.")
             elif r.thermal_state < THERMAL_REVERT:
                 self.state.thermal_warned = False
+        if self.config.auto_when_plugged:
+            self._auto_reconcile(r)
         return r
 
     def _retry_alarm(self) -> None:
@@ -645,6 +688,8 @@ if rumps is not None:  # pragma: no cover
             self.controller = controller
 
             self.toggle_item = rumps.MenuItem("Stay Awake", callback=self.on_toggle)
+            self.auto_item = rumps.MenuItem("Stay awake while plugged in",
+                                            callback=self.on_toggle_auto)
             self.info_battery = rumps.MenuItem("Battery: …")
             self.info_timer = rumps.MenuItem("Auto-off: —")
             self.info_thermal = rumps.MenuItem("Thermal: …")
@@ -659,6 +704,7 @@ if rumps is not None:  # pragma: no cover
 
             self.menu = [
                 self.toggle_item,
+                self.auto_item,
                 rumps.separator,
                 self.info_battery, self.info_timer, self.info_thermal, self.info_state,
                 rumps.separator,
@@ -677,6 +723,20 @@ if rumps is not None:  # pragma: no cover
                 self.controller.request_disable()
             else:
                 self.controller.request_enable()
+            self.refresh()
+
+        def on_toggle_auto(self, _sender):
+            c = self.controller
+            new_val = not c.config.auto_when_plugged
+            c.config.auto_when_plugged = new_val
+            c.config = c.config.sanitized()
+            save_config(c.config)
+            if new_val:
+                c.state.auto_suppressed = False
+                c.tick()
+            elif c.state.enabled and c.state.engaged_by_auto:
+                c.request_revert("preference off")
+            self._sync_choice_checks()
             self.refresh()
 
         def on_pick_timer(self, sender):
@@ -726,7 +786,8 @@ if rumps is not None:  # pragma: no cover
             if st.alarm:
                 state_txt = "ALARM — may still be awake"
             elif st.enabled:
-                state_txt = "awake (on power)" if r.power_plugged is True else "awake (on battery)"
+                where = "on power" if r.power_plugged is True else "on battery"
+                state_txt = f"awake ({'auto, ' if st.engaged_by_auto else ''}{where})"
             else:
                 state_txt = "off"
                 if st.last_revert_reason:
@@ -734,6 +795,7 @@ if rumps is not None:  # pragma: no cover
             self.info_state.title = "State: " + state_txt
 
         def _sync_choice_checks(self):
+            self.auto_item.state = 1 if self.controller.config.auto_when_plugged else 0
             chosen_timer = next(l for l, k in TIMER_LABELS.items()
                                 if k == self.controller.state.timer_choice)
             for label, item in self._timer_items.items():

@@ -9,7 +9,8 @@
   "default_timer_plugged": "indefinite",  // "1h"|"2h"|"4h"|"indefinite"
   "default_timer_unplugged": "1h",        // "1h"|"2h"|"4h"|"indefinite"
   "poll_seconds": 60,                     // int 5–60  (max 60 so SC-003/005 hold)
-  "thermal_guard": "auto"                 // "auto"|"warn"|"off"
+  "thermal_guard": "auto",                 // "auto"|"warn"|"off"
+  "auto_when_plugged": false              // bool; persistent auto stay-awake while on AC (FR-021)
 }
 ```
 

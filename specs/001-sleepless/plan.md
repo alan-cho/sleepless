@@ -87,6 +87,7 @@ Key decisions and the review findings they close:
 - **R2 — Unattended revert without sudoers → now an explicit alarm**, not a silent stuck state (FR-017). README leads with sudoers + boot-daemon install.
 - **R3 — Notifications best-effort / dead on macOS 26 unbundled.** Mitigated by the durable event log + glyph; do not count banners toward FR-014 acceptance unbundled.
 - **R4 — Hardened machines with `Defaults requiretty`** would break `sudo -n`; the sudoers drop-in adds `Defaults!PMSET_SLEEP !requiretty` defensively and docs note it.
+- **R5 — Auto-on-AC (FR-021) reacts to the power signal at poll granularity.** Auto engage/revert keys off `psutil` `power_plugged`; a transient `None`/`False` (charger renegotiation) could cause a spurious revert + re-engage over ≤2 polls. This is **fail-safe** (errs toward reverting / toward awake-while-plugged, never toward battery drain) and bounded by the poll interval; no debounce is applied, so a real unplug still reverts within one poll. Reverts/disables are dispatched **non-droppable** (block until any in-flight enable finishes) so a revert is never skipped by a concurrent auto-engage.
 
 ## Complexity Tracking
 

@@ -113,13 +113,14 @@ The menu shows what's happening; preferences persist.
 - **FR-018**: A boot-time privileged safety daemon forces normal sleep at every system startup (closes the abnormal-exit / login-window / post-uninstall window).
 - **FR-019**: Only one UI instance runs at a time (single-instance guard).
 - **FR-020**: A documented uninstall restores normal sleep and removes the privileged components (sudoers entry, LaunchAgent, boot daemon).
+- **FR-021**: Optional persistent **"stay awake while plugged in"** mode, off by default: when enabled, automatically engage keep-awake (non-interactively) whenever on AC power and revert to normal sleep when unplugged; re-engage on re-plug and after a guardrail clears; a manual disable while plugged suppresses auto re-engage until the next unplug. The preference persists across restarts, and all guardrails (FR-006/008/009) and the confirm/alarm behavior (FR-017) still apply.
 
 ### Key Entities
 
 - **Stay-Awake State**: intended on/off, plus the actual OS flag it is reconciled against, plus an alarm sub-state.
 - **Guardrail**: battery floor (incl. hard floor), auto-off timer, Low Power Mode, thermal pressure (with hysteresis) — any forces a revert.
 - **Auto-off Timer**: armed deadline or indefinite; remaining time.
-- **Configuration**: floor %, default timer (plugged/unplugged), selected timer, poll interval, thermal policy — persisted.
+- **Configuration**: floor %, default timer (plugged/unplugged), selected timer, poll interval, thermal policy, auto-stay-awake-while-plugged — persisted.
 - **Power/Battery Reading**: charge %, charging/connected state (tri-state).
 - **Event Log**: durable, timestamped record of enables and reverts (with reason).
 
@@ -137,6 +138,7 @@ The menu shows what's happening; preferences persist.
 - **SC-008**: With passwordless privilege configured, enabling requires zero password prompts and all unattended auto-reverts complete without any prompt.
 - **SC-009**: On every boot, the root daemon clears the disable-sleep flag at startup, ordered as early as launchd permits (and retried if the one-shot is late or fails); the residual pre-clear window is bounded to early boot, not a full session. Verified per quickstart §2 (set the flag, reboot, confirm it is cleared).
 - **SC-010**: A privileged revert that cannot be confirmed produces a persistent alarm state + log entry; the app never displays "off" while the flag is actually on.
+- **SC-011**: With "stay awake while plugged in" enabled and on AC power, the disable-sleep flag is set within one poll; on unplug, normal sleep is restored within one poll; the preference survives an app restart.
 
 ## Assumptions
 
