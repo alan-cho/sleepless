@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.alancho.sleepless.reset</string>
+  <!-- Root, one-shot at every boot: guarantee the Mac can sleep again even if
+       the app was killed while keep-awake was on. The ONLY privileged command
+       this daemon ever runs. -->
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/pmset</string>
+    <string>-a</string>
+    <string>disablesleep</string>
+    <string>0</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <!-- Re-run only if it exited non-zero (late/failed); a successful run is done. -->
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+</dict>
+</plist>
