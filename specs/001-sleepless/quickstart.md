@@ -52,7 +52,6 @@ Watch: `while sleep 1; do pmset -g | grep -i SleepDisabled || echo "(absent ⇒ 
 6. **SC-004 timer**: temporarily set `DURATIONS["1h"]=60`; unplug; enable → reverts ~60s later, "timer". Revert the edit.
 7. **SC-005 Low Power Mode / thermal**: enable; `sudo pmset -a lowpowermode 1` → reverts; `…0`. Thermal: saturate cores until macOS reports Serious (watch `python3 -c "from Foundation import NSProcessInfo; print(NSProcessInfo.processInfo().thermalState())"`) → reverts; confirm re-enable is refused until Nominal (hysteresis).
 8. **SC-006/007 menu + persistence**: menu shows battery %, charging, remaining, last revert reason; change floor, restart, confirm persisted; delete/corrupt config → recreated/defaults, no crash.
-9. **FR-021 auto stay-awake on AC**: enable "Stay awake while plugged in"; on AC confirm `SleepDisabled 1` within one poll; unplug → reverts to normal sleep; re-plug → re-engages; restart the app → the option persists and re-engages on AC.
 
 ## Package as a standalone .app (py2app)
 ```bash

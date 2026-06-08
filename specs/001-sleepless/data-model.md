@@ -12,7 +12,6 @@ Loaded at launch, validated/clamped, saved on change. Atomic + symlink-safe writ
 | `default_timer_unplugged` | str | `"1h"` | key of `DURATIONS` | Default auto-off on battery. |
 | `poll_seconds` | int | `60` | 5–60 | Guardrail/reconcile interval. **Max 60** so SC-003/005 ("within one poll") hold. |
 | `thermal_guard` | str | `"auto"` | `auto`\|`warn`\|`off` | `auto`=revert at Serious; `warn`=notify only; `off`=no Serious revert. Critical reverts regardless. |
-| `auto_when_plugged` | bool | `false` | `true`\|`false` | Persistent opt-in (FR-021): auto-engage keep-awake on AC, revert on unplug. Off by default. |
 
 Validation: wrong-type/out-of-range → that field's default (logged). Unknown keys ignored. Bounds enforced **at load**, before the value is used (e.g. before arming the timer). See [contracts/config-schema.md](./contracts/config-schema.md).
 
@@ -32,8 +31,7 @@ Validation: wrong-type/out-of-range → that field's default (logged). Unknown k
 | `alarm` | bool | `False` | True when a revert could not be confirmed (FR-017). |
 | `awaiting_nominal` | bool | `False` | Set after a thermal revert; blocks re-enable until thermal == Nominal (hysteresis). |
 | `last_revert_reason` | str \| None | `None` | For menu + log + notification. |
-| `engaged_by_auto` | bool | `False` | True when the current enable came from auto-when-plugged, so only auto reverts what auto engaged (FR-021). |
-| `auto_suppressed` | bool | `False` | Set when the user disables while plugged in; blocks auto re-engage until the next unplug (FR-021). |
+| `last_power_plugged` | bool \| None | `None` | Prior poll's power state; a change re-arms the auto-off timer (FR-007). |
 
 ## SystemReadings (produced each poll by SystemAdapter)
 | Field | Type | Meaning | If unavailable → |
@@ -71,6 +69,7 @@ unsafe_conditions(readings, config) -> str | None   # pure
 
 ## Timer helpers (monotonic)
 - `resolve_default_timer(power_plugged, config)` → `default_timer_plugged` if `power_plugged is True` else `default_timer_unplugged`.
+- `resolve_timer_key(timer_choice, power_plugged, config)` → the explicit `timer_choice`, or `resolve_default_timer(...)` when `"auto"`; used at enable **and to re-arm on a power-source change** while enabled (plug in → indefinite on auto; unplug → selected duration, default 1h).
 - On enable: `secs = DURATIONS[choice]`; `awake_until = None if secs is None else time.monotonic() + secs`. Monotonic so wall-clock/NTP jumps can't shorten/extend a session; a separate wall-clock "ends at HH:MM" is computed only for display.
 - `compute_remaining(awake_until, now)` → `None` if indefinite, else `max(0, int(awake_until - now))`.
 
@@ -82,8 +81,7 @@ States: **OFF**, **AWAKE** (glyph AC/batt), **ALARM** (revert failed).
 | OFF | user toggle | `can_enable()` is None | AWAKE | `set_disablesleep(1)`; reconcile-confirm; arm timer; glyph AC/batt; log+notify |
 | OFF | user toggle | `can_enable()` reason | OFF | refuse; notify reason; checkbox stays off |
 | AWAKE | user toggle | — | OFF | `set_disablesleep(0)`; confirm; clear timer; glyph off; log |
-| OFF | poll: `auto_when_plugged`, on AC, not suppressed | `can_enable()` is None | AWAKE | `set_disablesleep(1)` (sudo -n, non-interactive); confirm; `engaged_by_auto=True`; indefinite; glyph AC; log |
-| AWAKE | poll: `auto_when_plugged`, unplugged, `engaged_by_auto` | — | OFF | revert (reason `unplugged`); clear `engaged_by_auto`; clear suppression; glyph off; log |
+| AWAKE | poll: power source changed | — | AWAKE | re-arm the auto-off timer for the new power state (timer math only, no privileged write) |
 | AWAKE | poll: `decide_revert()` ≠ None | revert confirmed | OFF | `set_disablesleep(0)` (sudo -n only); confirm via read; clear timer; if reason=="thermal*" set `awaiting_nominal`; glyph off; log+notify |
 | AWAKE | poll: revert attempted | **not confirmed** (read still shows on) | ALARM | set `alarm`; glyph ⚠; repeat notify+log; retry `set_disablesleep(0)` each poll |
 | ALARM | poll | confirm-read **positively** shows off (clean exit, line absent or `0`) | OFF | clear `alarm`; log recovery |

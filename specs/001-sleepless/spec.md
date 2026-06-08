@@ -99,7 +99,7 @@ The menu shows what's happening; preferences persist.
 - **FR-004**: Automatically restore normal sleep on disable, on quit (via the reliable pre-quit hook), and best-effort on process termination.
 - **FR-005**: On launch, establish a known-safe baseline (restore normal sleep, start OFF).
 - **FR-006**: While on and **not confirmably charging**, restore normal sleep when charge < configurable floor (default 20%), checked each poll (default 60s). A **non-overridable hard floor** always reverts regardless of configuration.
-- **FR-007**: Auto-off timer (1h/2h/4h/indefinite); default is power-conditional (plugged→indefinite, battery→1h); overridable per session.
+- **FR-007**: Auto-off timer (1h/2h/4h/indefinite); default is power-conditional (plugged→indefinite, battery→1h); overridable per session. While enabled, the timer **re-arms on a power-source change** — plugging in clears the countdown (indefinite, on the auto default); unplugging starts the selected duration (default 1h).
 - **FR-008**: While on, restore normal sleep automatically when Low Power Mode is active.
 - **FR-009**: While on, restore normal sleep when thermal pressure ≥ Serious (configurable auto/warn/off), with **hysteresis** (re-enable only after returning to Nominal). **Critical** thermal always reverts regardless of configuration.
 - **FR-010**: Refuse to enable when a guardrail condition already holds, stating the reason. (Enable-time counterpart of the while-on revert guardrails FR-006/FR-008/FR-009 — same conditions, checked before enabling rather than during.)
@@ -113,14 +113,13 @@ The menu shows what's happening; preferences persist.
 - **FR-018**: A boot-time privileged safety daemon forces normal sleep at every system startup (closes the abnormal-exit / login-window / post-uninstall window).
 - **FR-019**: Only one UI instance runs at a time (single-instance guard).
 - **FR-020**: A documented uninstall restores normal sleep and removes the privileged components (sudoers entry, LaunchAgent, boot daemon).
-- **FR-021**: Optional persistent **"stay awake while plugged in"** mode, off by default: when enabled, automatically engage keep-awake (non-interactively) whenever on AC power and revert to normal sleep when unplugged; re-engage on re-plug and after a guardrail clears; a manual disable while plugged suppresses auto re-engage until the next unplug. The preference persists across restarts, and all guardrails (FR-006/008/009) and the confirm/alarm behavior (FR-017) still apply.
 
 ### Key Entities
 
 - **Stay-Awake State**: intended on/off, plus the actual OS flag it is reconciled against, plus an alarm sub-state.
 - **Guardrail**: battery floor (incl. hard floor), auto-off timer, Low Power Mode, thermal pressure (with hysteresis) — any forces a revert.
 - **Auto-off Timer**: armed deadline or indefinite; remaining time.
-- **Configuration**: floor %, default timer (plugged/unplugged), selected timer, poll interval, thermal policy, auto-stay-awake-while-plugged — persisted.
+- **Configuration**: floor %, default timer (plugged/unplugged), selected timer, poll interval, thermal policy — persisted.
 - **Power/Battery Reading**: charge %, charging/connected state (tri-state).
 - **Event Log**: durable, timestamped record of enables and reverts (with reason).
 
@@ -138,7 +137,6 @@ The menu shows what's happening; preferences persist.
 - **SC-008**: With passwordless privilege configured, enabling requires zero password prompts and all unattended auto-reverts complete without any prompt.
 - **SC-009**: On every boot, the root daemon clears the disable-sleep flag at startup, ordered as early as launchd permits (and retried if the one-shot is late or fails); the residual pre-clear window is bounded to early boot, not a full session. Verified per quickstart §2 (set the flag, reboot, confirm it is cleared).
 - **SC-010**: A privileged revert that cannot be confirmed produces a persistent alarm state + log entry; the app never displays "off" while the flag is actually on.
-- **SC-011**: With "stay awake while plugged in" enabled and on AC power, the disable-sleep flag is set within one poll; on unplug, normal sleep is restored within one poll; the preference survives an app restart.
 
 ## Assumptions
 
