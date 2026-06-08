@@ -9,7 +9,7 @@
 ## Format: `[ID] [P?] [Story] Description`
 
 ## Path Conventions
-Repo root = `sleepless/`. App: `sleepless.py`. Tests: `tests/test_sleepless.py`. Packaging/ops: `setup.py`, `ai.pressw.sleepless.plist`, `ai.pressw.sleepless.reset.plist`, `install.sh`, `uninstall.sh`, `README.md`.
+Repo root = `sleepless/`. App: `sleepless.py`. Tests: `tests/test_sleepless.py`. Packaging/ops: `setup.py`, `com.alancho.sleepless.plist`, `com.alancho.sleepless.reset.plist`, `install.sh`, `uninstall.sh`, `README.md`.
 
 ---
 
@@ -54,8 +54,8 @@ Repo root = `sleepless/`. App: `sleepless.py`. Tests: `tests/test_sleepless.py`.
 - [ ] T017 [US1] `main()` in `sleepless.py`: `setActivationPolicy_(NSApplicationActivationPolicyAccessory)` first; single-instance guard (T010); load config; register `atexit` + SIGTERM/SIGINT revert; subscribe rumps `before_quit` revert; **force `set_disablesleep(0)` launch baseline** + confirm; start `rumps.Timer(self.tick, poll_seconds)`.
 - [ ] T018 [US1] `toggle()` in `sleepless.py`: enable path calls `can_enable`; on allow → `set_disablesleep(1, allow_prompt=True)` + confirm + arm timer (US2 wires durations) + glyph; disable path → `set_disablesleep(0, allow_prompt=False)` + confirm; refuse with reason otherwise.
 - [ ] T019 [US1] `tick()` core in `sleepless.py`: read all signals; reconcile glyph to actual `sleep_disabled` (absent⇒off); when enabled run `decide_revert`; on revert use non-interactive `set_disablesleep(0)`; **confirm read** — if unconfirmed enter ALARM (⚠ glyph, repeat notify+log, retry each poll), recover to OFF only on a positive off-read.
-- [ ] T020 [P] [US1] `ai.pressw.sleepless.plist` (user LaunchAgent): `RunAtLoad`, `KeepAlive{Crashed:true}`, `LimitLoadToSessionType=Aqua`, `EnvironmentVariables.PATH`, `StandardOut/ErrorPath`, raised `ExitTimeOut`.
-- [ ] T021 [P] [US1] `ai.pressw.sleepless.reset.plist` (root LaunchDaemon): `RunAtLoad` + `KeepAlive{SuccessfulExit:false}`, `ProgramArguments=[/usr/bin/pmset,-a,disablesleep,0]` (contracts/privileged-commands.md §Boot reset).
+- [ ] T020 [P] [US1] `com.alancho.sleepless.plist` (user LaunchAgent): `RunAtLoad`, `KeepAlive{Crashed:true}`, `LimitLoadToSessionType=Aqua`, `EnvironmentVariables.PATH`, `StandardOut/ErrorPath`, raised `ExitTimeOut`.
+- [ ] T021 [P] [US1] `com.alancho.sleepless.reset.plist` (root LaunchDaemon): `RunAtLoad` + `KeepAlive{SuccessfulExit:false}`, `ProgramArguments=[/usr/bin/pmset,-a,disablesleep,0]` (contracts/privileged-commands.md §Boot reset).
 - [ ] T022 [P] [US1] `install.sh`/`uninstall.sh`: install writes the sudoers drop-in (substituting `$(id -un)`), copies both plists (daemon to `/Library/LaunchDaemons` root:wheel 0644), bootstraps them; uninstall reverts `disablesleep 0` FIRST, then removes plists + sudoers (quickstart §Uninstall, FR-020).
 - [ ] T023 [P] [US1] Tests in `tests/test_sleepless.py`: enable→disable→quit revert; launch baseline forces off; reconcile follows external change; revert-unconfirmed ⇒ ALARM and no false "off" recovery; clean quit exits 0.
 
@@ -110,7 +110,7 @@ Repo root = `sleepless/`. App: `sleepless.py`. Tests: `tests/test_sleepless.py`.
 
 ## Phase 7: Polish & Cross-Cutting
 
-- [ ] T036 [P] `setup.py` (py2app): `argv_emulation=False`, `packages=['rumps','psutil']`, `plist.LSUIElement=True`, bundle id `ai.pressw.sleepless`. If the bundle build fails on Python 3.14, record the failure and ship via the LaunchAgent-runs-script path (T020) — do NOT block other tasks; optionally retry under a 3.13 venv.
+- [ ] T036 [P] `setup.py` (py2app): `argv_emulation=False`, `packages=['rumps','psutil']`, `plist.LSUIElement=True`, bundle id `com.alancho.sleepless`. If the bundle build fails on Python 3.14, record the failure and ship via the LaunchAgent-runs-script path (T020) — do NOT block other tasks; optionally retry under a 3.13 venv.
 - [ ] T037 [P] `README.md`: install (deps, sudoers, boot daemon, LaunchAgent), run, package, **uninstall**, the threat-model note, and the Python-3.14/py2app caveat.
 - [ ] T038 Verify coverage ≥85% on the decision core (`pytest --cov`); fill gaps.
 - [ ] T039 Run the quickstart manual validation end-to-end (SC-001…010) on the real machine; record results. SC-001 (lid-closed) and SC-009 (boot clear) are validated HERE ONLY (no automated test) — capture evidence (`/tmp/awake.log` timestamps; the reset-daemon log).
@@ -127,8 +127,8 @@ Repo root = `sleepless/`. App: `sleepless.py`. Tests: `tests/test_sleepless.py`.
 ## Parallel Example (after T019)
 ```text
 # Separate files — run together:
-T020 ai.pressw.sleepless.plist
-T021 ai.pressw.sleepless.reset.plist
+T020 com.alancho.sleepless.plist
+T021 com.alancho.sleepless.reset.plist
 T022 install.sh / uninstall.sh
 T023 tests/test_sleepless.py (US1 cases)
 ```

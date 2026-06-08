@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>ai.pressw.sleepless</string>
+  <string>com.alancho.sleepless</string>
   <key>ProgramArguments</key>
   <array>
     <string>/usr/local/bin/python3</string>

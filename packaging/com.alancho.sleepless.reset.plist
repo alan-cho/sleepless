@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>ai.pressw.sleepless.reset</string>
+  <string>com.alancho.sleepless.reset</string>
   <!-- Root, one-shot at every boot: guarantee the Mac can sleep again even if
        the app was killed while keep-awake was on. The ONLY privileged command
        this daemon ever runs. -->

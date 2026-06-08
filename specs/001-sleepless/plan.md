@@ -45,14 +45,17 @@ A menu-bar-only macOS app that toggles the OS "disable sleep" setting so the Mac
 ```text
 sleepless/
 ├── sleepless.py                       # the app — single, well-commented file
+├── Makefile                           # task runner: run / test / cov / package / install
 ├── setup.py                           # py2app packaging
-├── requirements.txt                   # rumps, psutil
-├── requirements-dev.txt               # pytest
-├── ai.pressw.sleepless.plist          # LaunchAgent (user) — login start, KeepAlive SuccessfulExit=false
-├── ai.pressw.sleepless.reset.plist    # LaunchDaemon (root) — boot-time `pmset -a disablesleep 0`
-├── install.sh / uninstall.sh          # install+uninstall (sudoers, plists, revert-on-uninstall)
-├── README.md
-└── tests/test_sleepless.py            # unit tests for the decision core
+├── requirements.txt  requirements-dev.txt   # runtime / test deps
+├── pyproject.toml                     # pytest + coverage config
+├── README.md  LICENSE
+├── tests/test_sleepless.py            # unit tests for the decision core
+├── packaging/                         # distribution + launchd
+│   ├── com.alancho.sleepless.plist        # LaunchAgent (user) — login start
+│   ├── com.alancho.sleepless.reset.plist  # LaunchDaemon (root) — boot pmset reset
+│   └── install.sh / uninstall.sh
+└── .github/workflows/ci.yml           # run tests on push
 ```
 Docs: `specs/001-sleepless/{plan,spec,research,data-model,quickstart}.md`, `contracts/`, `checklists/`.
 
@@ -76,7 +79,7 @@ Key decisions and the review findings they close:
 - **Config hardening** — bounds clamped at load (incl. `poll_seconds` max 60 so SC-003/005 hold); 0700 dir / 0600 file, `O_NOFOLLOW`, size cap, symlink-safe atomic write; corrupt → back up + defaults.
 - **Single-instance lock** — exclusive `flock` on `~/.config/sleepless/sleepless.lock`; a second launch exits.
 - **No-Dock** — `NSApplication.sharedApplication().setActivationPolicy_(NSApplicationActivationPolicyAccessory)` called first thing in `main()` (avoids a Dock flash); `LSUIElement: True` in the bundle.
-- **Boot daemon** — `ai.pressw.sleepless.reset.plist` is a **root LaunchDaemon** (`/Library/LaunchDaemons/`, `RunAtLoad`) whose `ProgramArguments` are exactly `/usr/bin/pmset -a disablesleep 0`. Runs as root so no sudo needed; closes the boot/login-window/post-uninstall window (C4, FR-018, SC-009). Add `KeepAlive{SuccessfulExit:false}` (short retry) so a late/failed one-shot re-fires — launchd does not guarantee strict pre-login ordering for `RunAtLoad`, so SC-009 is "as early as launchd permits," not absolute. See [contracts/privileged-commands.md](./contracts/privileged-commands.md).
+- **Boot daemon** — `packaging/com.alancho.sleepless.reset.plist` is a **root LaunchDaemon** (`/Library/LaunchDaemons/`, `RunAtLoad`) whose `ProgramArguments` are exactly `/usr/bin/pmset -a disablesleep 0`. Runs as root so no sudo needed; closes the boot/login-window/post-uninstall window (C4, FR-018, SC-009). Add `KeepAlive{SuccessfulExit:false}` (short retry) so a late/failed one-shot re-fires — launchd does not guarantee strict pre-login ordering for `RunAtLoad`, so SC-009 is "as early as launchd permits," not absolute. See [contracts/privileged-commands.md](./contracts/privileged-commands.md).
 - **User LaunchAgent** — `RunAtLoad` + `KeepAlive{Crashed:true}` so only an abnormal/crash exit relaunches (re-asserting the baseline); a clean Quit MUST exit 0 (`os._exit(0)` after the best-effort revert) and `before_quit` MUST NOT raise, so launchd does not relaunch it (H2 — avoids a quit→relaunch loop). The launch baseline forces OFF before any toggle is possible, so even a crash-loop (throttled by launchd to ~10s) can't leave the flag set between respawns. `StandardErrorPath`/`StandardOutPath` set; `EnvironmentVariables.PATH` set defensively; `ExitTimeOut` raised so a teardown revert can finish.
 
 ### Risks

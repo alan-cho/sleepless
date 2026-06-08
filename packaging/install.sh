@@ -23,14 +23,14 @@ sudo -n /usr/bin/pmset -a disablesleep 1 && sudo -n /usr/bin/pmset -a disablesle
   && echo "    passwordless OK"
 
 echo "==> root boot-reset LaunchDaemon"
-sudo install -m 0644 -o root -g wheel "$HERE/ai.pressw.sleepless.reset.plist" /Library/LaunchDaemons/
-sudo launchctl bootout system/ai.pressw.sleepless.reset 2>/dev/null || true
-sudo launchctl bootstrap system /Library/LaunchDaemons/ai.pressw.sleepless.reset.plist
+sudo install -m 0644 -o root -g wheel "$HERE/com.alancho.sleepless.reset.plist" /Library/LaunchDaemons/
+sudo launchctl bootout system/com.alancho.sleepless.reset 2>/dev/null || true
+sudo launchctl bootstrap system /Library/LaunchDaemons/com.alancho.sleepless.reset.plist
 
 echo "==> login LaunchAgent"
-install -m 0644 "$HERE/ai.pressw.sleepless.plist" "$HOME/Library/LaunchAgents/"
-launchctl bootout "gui/${UID_NUM}/ai.pressw.sleepless" 2>/dev/null || true
-launchctl bootstrap "gui/${UID_NUM}" "$HOME/Library/LaunchAgents/ai.pressw.sleepless.plist"
+install -m 0644 "$HERE/com.alancho.sleepless.plist" "$HOME/Library/LaunchAgents/"
+launchctl bootout "gui/${UID_NUM}/com.alancho.sleepless" 2>/dev/null || true
+launchctl bootstrap "gui/${UID_NUM}" "$HOME/Library/LaunchAgents/com.alancho.sleepless.plist"
 
 echo "Done. Sleepless is running in the menu bar."
-echo "If your repo or python3 path differs, edit ai.pressw.sleepless.plist first."
+echo "If your repo or python3 path differs, edit com.alancho.sleepless.plist first."

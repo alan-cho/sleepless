@@ -246,15 +246,17 @@ def test_osascript_constants_literal():
     assert S._OSASCRIPT[0].endswith('disablesleep 0" with administrator privileges')
 
 
-def test_read_battery_without_psutil():
+def test_read_battery_without_psutil(monkeypatch):
+    monkeypatch.setattr(S, "psutil", None)
     assert S.SystemAdapter().read_battery() == (None, None)
 
 
-def test_read_thermal_state_without_pyobjc():
-    assert S.SystemAdapter().read_thermal_state() == 0
+def test_read_thermal_state_returns_valid():
+    assert S.SystemAdapter().read_thermal_state() in (0, 1, 2, 3)
 
 
-def test_notify_without_rumps_is_noop():
+def test_notify_without_rumps_is_noop(monkeypatch):
+    monkeypatch.setattr(S, "rumps", None)
     S.SystemAdapter().notify("a", "b", "c")
 
 

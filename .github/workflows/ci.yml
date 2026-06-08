@@ -1,0 +1,18 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    # Tests use a fake adapter + mocked subprocess and guard the macOS-only
+    # imports, so they run on any OS without rumps/pyobjc/psutil installed.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: python -m pip install --upgrade pip pytest pytest-cov
+      - run: python -m pytest --cov=sleepless --cov-report=term-missing --cov-fail-under=85

@@ -16,24 +16,30 @@ overheat the machine — or be left stuck awake.
 Full design lives in [`specs/001-sleepless/`](specs/001-sleepless/) (spec, plan, contracts,
 data model). Built with the spec-kit blueprint flow.
 
+## Layout
+- `sleepless.py` — the app (single, well-commented file) · `tests/` — unit tests
+- `packaging/` — launchd plists + `install.sh` / `uninstall.sh`
+- `Makefile` — task runner (`make help`) · `setup.py` — py2app packaging
+- `specs/001-sleepless/` — design docs (spec, plan, contracts, …)
+
 ## Requirements
 - macOS (Apple Silicon), Python 3 (a python.org framework build recommended for the menu bar).
-- `pip install --user rumps psutil` (the run path works on Python 3.14; only the optional
-  `py2app` bundle is unverified there — see Packaging).
+- `make deps` (installs `rumps`, `psutil`). The run path works on Python 3.14; only the
+  optional `py2app` bundle is unverified there — see Packaging.
 
 ## Run
 ```bash
-python3 sleepless.py
+make run            # or: python3 sleepless.py
 ```
 
 ## Install (privilege + login start + boot backstop)
 ```bash
-./install.sh
+make install        # or: bash packaging/install.sh
 ```
 This installs a **scoped passwordless sudoers** entry for *exactly* the two
 `pmset -a disablesleep {0,1}` commands, the **root boot-reset LaunchDaemon**, and the
-**login LaunchAgent**. Edit `ai.pressw.sleepless.plist` first if your repo path or
-`python3` location differ.
+**login LaunchAgent**. Edit `packaging/com.alancho.sleepless.plist` first if your repo path
+or `python3` location differ.
 
 Without the sudoers entry, manual enabling shows a GUI admin prompt, and unattended reverts
 can't complete silently — the app then shows a persistent **⚠ ALARM** rather than failing
@@ -41,16 +47,14 @@ quietly. Events are also logged to `~/Library/Logs/sleepless.log`.
 
 ## Test
 ```bash
-python3 -m pytest tests/ -v          # or: python3 -m pytest --cov=sleepless
+make test           # or: make cov  (enforces the >=85% coverage gate)
 ```
 Unit tests cover the decision core, config persistence/corruption, the privileged-command
-construction, and the controller's confirm-by-read / ALARM / hysteresis logic
-(coverage gate ≥85% on the core).
+construction, and the controller's confirm-by-read / ALARM / hysteresis logic.
 
 ## Package as a standalone .app (optional)
 ```bash
-pip install --user py2app
-python3 setup.py py2app            # -> dist/Sleepless.app
+make package        # python3 setup.py py2app  ->  dist/Sleepless.app
 xattr -dr com.apple.quarantine dist/Sleepless.app
 ```
 If bundling fails on Python 3.14, the supported delivery is the LaunchAgent running the
@@ -58,7 +62,7 @@ script directly (no bundle), or build under a Python 3.13 venv.
 
 ## Uninstall
 ```bash
-./uninstall.sh                     # restores normal sleep first, then removes everything
+make uninstall                     # or: bash packaging/uninstall.sh — restores sleep first
 ```
 
 ## Tweaking
@@ -71,4 +75,5 @@ The NOPASSWD grant lets any process running as your user toggle `disablesleep` w
 password — accepted because it is pinned to two exact argv strings (no broader `pmset`
 power) and the only effect is sleep on/off, which the guardrails already bound. The binary
 is intentionally **not** digest-pinned (a macOS update would change the hash and silently
-break the safety revert). See [`contracts/privileged-commands.md`](specs/001-sleepless/contracts/privileged-commands.md).
+break the safety revert). See [`packaging/`](packaging/) and
+[`contracts/privileged-commands.md`](specs/001-sleepless/contracts/privileged-commands.md).

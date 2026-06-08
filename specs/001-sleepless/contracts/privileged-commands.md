@@ -26,7 +26,7 @@ alancho ALL=(root) NOPASSWD: PMSET_SLEEP
 - `!requiretty` ensures `sudo -n` works from the TTY-less LaunchAgent context (macOS default is already no-requiretty; this is defensive for MDM-hardened machines).
 - **Not digest-pinned by design.** A `sha256:` pin would break on every macOS update that changes `pmset`, silently disabling the safety revert (worse than the threat it prevents — `pmset` is SIP-protected). Documented trade-off.
 
-## Boot reset LaunchDaemon (`/Library/LaunchDaemons/ai.pressw.sleepless.reset.plist`, root:wheel 0644)
+## Boot reset LaunchDaemon (`/Library/LaunchDaemons/com.alancho.sleepless.reset.plist`, root:wheel 0644)
 `RunAtLoad` + `KeepAlive{SuccessfulExit:false}` (short retry so a late/failed run re-fires), `ProgramArguments = [/usr/bin/pmset, -a, disablesleep, 0]`. Runs as root at boot → no sudo needed. Loaded with `sudo launchctl bootstrap system <plist>`. This is the FR-018/SC-009 backstop. launchd does not guarantee strict pre-login ordering for `RunAtLoad`, so it clears the flag "as early as launchd permits," not provably before every possible session.
 
 ## Invocation contract — `SystemAdapter.set_disablesleep(value: int, *, allow_prompt: bool) -> bool`

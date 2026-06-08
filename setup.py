@@ -6,7 +6,7 @@ OPTIONS = {
     "plist": {
         "LSUIElement": True,
         "CFBundleName": "Sleepless",
-        "CFBundleIdentifier": "ai.pressw.sleepless",
+        "CFBundleIdentifier": "com.alancho.sleepless",
         "CFBundleShortVersionString": "1.0.0",
     },
     "packages": ["rumps", "psutil"],
