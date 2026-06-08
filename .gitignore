@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 __pycache__/
 *.pyc
 build/
@@ -5,3 +6,8 @@ dist/
 *.egg-info/
 .coverage
 .pytest_cache/
+=======
+__pycache__
+__pytest_cache
+.coverage*
+>>>>>>> main
