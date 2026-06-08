@@ -420,3 +420,55 @@ def test_shutdown_revert_sets_off():
     a.flag = True
     c.shutdown_revert()
     assert (0, False) in a.set_calls
+
+
+def test_resolve_timer_key():
+    c = cfg(default_timer_plugged="indefinite", default_timer_unplugged="1h")
+    assert S.resolve_timer_key("auto", True, c) == "indefinite"
+    assert S.resolve_timer_key("auto", False, c) == "1h"
+    assert S.resolve_timer_key("2h", True, c) == "2h"
+    assert S.resolve_timer_key("2h", False, c) == "2h"
+
+
+def test_timer_rearms_to_unplugged_default_on_unplug():
+    c, a, clk = make_controller()
+    a.plugged = True
+    c.request_enable()
+    assert c.state.awake_until is None
+    c.tick()
+    a.plugged = False
+    c.tick()
+    assert c.state.awake_until == clk.t + 3600
+
+
+def test_timer_rearms_to_indefinite_on_plug():
+    c, a, clk = make_controller()
+    a.plugged = False
+    a.percent = 90.0
+    c.request_enable()
+    assert c.state.awake_until == clk.t + 3600
+    c.tick()
+    a.plugged = True
+    c.tick()
+    assert c.state.awake_until is None
+
+
+def test_timer_rearm_respects_explicit_choice_on_unplug():
+    c, a, clk = make_controller()
+    c.state.timer_choice = "2h"
+    a.plugged = True
+    c.request_enable()
+    assert c.state.awake_until == clk.t + 7200
+    c.tick()
+    a.plugged = False
+    c.tick()
+    assert c.state.awake_until == clk.t + 7200
+
+
+def test_timer_no_rearm_without_power_change():
+    c, a, _ = make_controller()
+    a.plugged = True
+    c.request_enable()
+    c.tick()
+    c.tick()
+    assert c.state.awake_until is None

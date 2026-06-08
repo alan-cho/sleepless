@@ -101,6 +101,7 @@ HARD_FLOOR = 5            # battery % the floor can never be configured below
 THERMAL_REVERT = 2        # NSProcessInfoThermalStateSerious
 THERMAL_CRITICAL = 3      # NSProcessInfoThermalStateCritical (always reverts)
 POLL_MIN, POLL_MAX = 5, 60  # clamp range for poll_seconds (max 60 so reverts fire "within one poll")
+UI_REFRESH_SECONDS = 1      # menu/glyph re-render cadence (memory-only; readings stay cached)
 
 # Absolute paths — never rely on $PATH for privileged or state-reading calls.
 PMSET = "/usr/bin/pmset"
@@ -326,6 +327,13 @@ def resolve_default_timer(power_plugged: Optional[bool], cfg: Config) -> str:
     return cfg.default_timer_plugged if power_plugged is True else cfg.default_timer_unplugged
 
 
+def resolve_timer_key(timer_choice: str, power_plugged: Optional[bool], cfg: Config) -> str:
+    """Duration key to arm: an explicit choice as-is, else the power-conditional
+    default when on 'auto'. Used at enable and to re-arm on a power-source change."""
+    return (resolve_default_timer(power_plugged, cfg)
+            if timer_choice == "auto" else timer_choice)
+
+
 def compute_remaining(awake_until: Optional[float], now: float) -> Optional[int]:
     """Seconds left on the timer, or None for indefinite."""
     if awake_until is None:
@@ -360,6 +368,7 @@ class State:
     awaiting_nominal: bool = False       # thermal hysteresis lockout
     thermal_warned: bool = False         # de-dupe "warn"-mode notifications
     last_revert_reason: Optional[str] = None
+    last_power_plugged: Optional[bool] = None  # prior poll's power, to detect a source change
 
 
 # ============================================================================
@@ -482,14 +491,23 @@ class Controller:
         read_ok, disabled = self.adapter.read_sleep_disabled()
         return read_ok and (disabled == bool(value))
 
-    def _dispatch(self, fn: Callable[[], None]) -> None:
-        """Run a privileged action, coalescing overlapping requests (single-flight)."""
+    def _dispatch(self, fn: Callable[[], None], *, critical: bool = False) -> None:
+        """Run a privileged action on a worker, single-flight. Reverts are
+        `critical`: they block until any in-flight write finishes rather than being
+        dropped — a revert is never skipped. Enables are best-effort: if a write is
+        already in flight the round is dropped and retried on the next poll."""
         if self._sync:
             if self._write_lock.acquire(blocking=False):
                 try:
                     fn()
                 finally:
                     self._write_lock.release()
+            return
+        if critical:
+            def critical_runner():
+                with self._write_lock:
+                    fn()
+            threading.Thread(target=critical_runner, daemon=True).start()
             return
         if not self._write_lock.acquire(blocking=False):
             return  # a write is already in flight; this round is dropped
@@ -517,8 +535,7 @@ class Controller:
             self.adapter.notify(APP_NAME, "Not enabled", reason)
             log_event("enable-refused", reason)
             return reason
-        key = (resolve_default_timer(r.power_plugged, self.config)
-               if self.state.timer_choice == "auto" else self.state.timer_choice)
+        key = resolve_timer_key(self.state.timer_choice, r.power_plugged, self.config)
         self._dispatch(lambda: self._apply_enable(key))
         return None
 
@@ -538,10 +555,11 @@ class Controller:
             log_event("enable-failed", "unconfirmed")
 
     def request_disable(self) -> None:
-        self._dispatch(lambda: self._apply_off("user", thermal=False))
+        self._dispatch(lambda: self._apply_off("user", thermal=False), critical=True)
 
     def request_revert(self, reason: str) -> None:
-        self._dispatch(lambda: self._apply_off(reason, thermal=reason.startswith("thermal")))
+        self._dispatch(lambda: self._apply_off(reason, thermal=reason.startswith("thermal")),
+                       critical=True)
 
     def _apply_off(self, reason: str, *, thermal: bool) -> None:
         confirmed = self._perform(0, allow_prompt=False)
@@ -565,18 +583,31 @@ class Controller:
         ok, disabled = self.adapter.read_sleep_disabled()
         return ok and disabled
 
+    def _rearm_on_power_change(self, r: Readings) -> None:
+        """When the power source flips mid-session, re-arm the auto-off timer for
+        the new state: plugging in clears the countdown (indefinite, on 'auto');
+        unplugging starts the selected duration (default 1h)."""
+        prev = self.state.last_power_plugged
+        if prev is None or (prev is True) == (r.power_plugged is True):
+            return
+        key = resolve_timer_key(self.state.timer_choice, r.power_plugged, self.config)
+        secs = DURATIONS[key]
+        self.state.awake_until = None if secs is None else self._now() + secs
+
     # --- periodic tick (called by the UI timer) ---
     def tick(self) -> Readings:
         """Evaluate guardrails / reconcile. Returns the latest readings so the
         view can refresh labels + glyph. Privileged writes are dispatched."""
         r = self.readings()
         if self.state.alarm:
-            self._dispatch(lambda: self._retry_alarm())
+            self._dispatch(lambda: self._retry_alarm(), critical=True)
+            self.state.last_power_plugged = r.power_plugged
             return r
         # Clear the hysteresis lockout once the system is fully Nominal again.
         if self.state.awaiting_nominal and r.thermal_state == 0:
             self.state.awaiting_nominal = False
         if self.state.enabled:
+            self._rearm_on_power_change(r)
             reason = decide_revert(self.state, r, self.config, self._now())
             if reason:
                 self.request_revert(reason)
@@ -587,6 +618,7 @@ class Controller:
                                     "Staying awake — consider turning off.")
             elif r.thermal_state < THERMAL_REVERT:
                 self.state.thermal_warned = False
+        self.state.last_power_plugged = r.power_plugged
         return r
 
     def _retry_alarm(self) -> None:
@@ -643,6 +675,7 @@ if rumps is not None:  # pragma: no cover
         def __init__(self, controller: "Controller"):
             super().__init__(APP_NAME, title=GLYPHS["off"], quit_button=None)
             self.controller = controller
+            self._readings = None
 
             self.toggle_item = rumps.MenuItem("Stay Awake", callback=self.on_toggle)
             self.info_battery = rumps.MenuItem("Battery: …")
@@ -670,6 +703,7 @@ if rumps is not None:  # pragma: no cover
             ]
             self._sync_choice_checks()
             rumps.Timer(self.on_tick, self.controller.config.poll_seconds).start()
+            rumps.Timer(self.on_ui_refresh, UI_REFRESH_SECONDS).start()
 
         # --- callbacks ---
         def on_toggle(self, _sender):
@@ -701,7 +735,10 @@ if rumps is not None:  # pragma: no cover
             self.refresh()
 
         def on_tick(self, _timer):
-            self.controller.tick()
+            self._readings = self.controller.tick()
+            self.refresh()
+
+        def on_ui_refresh(self, _timer):
             self.refresh()
 
         def on_quit(self, _sender):
@@ -710,11 +747,17 @@ if rumps is not None:  # pragma: no cover
 
         # --- view refresh ---
         def refresh(self):
-            r = self.controller.readings()
+            if self._readings is None:
+                self._readings = self.controller.readings()
+            r = self._readings
             st = self.controller.state
             self.title = glyph_for(st, r)
-            self.toggle_item.state = 1 if st.enabled else 0
-            self.toggle_item.title = "Stay Awake" + (" (ALARM)" if st.alarm else "")
+            if st.alarm:
+                self.toggle_item.title = "Turn Off (ALARM)"
+            elif st.enabled:
+                self.toggle_item.title = "Turn Off"
+            else:
+                self.toggle_item.title = "Stay Awake"
             pct = "—" if r.battery_percent is None else f"{int(r.battery_percent)}%"
             power = "charging" if r.power_plugged is True else "on battery"
             self.info_battery.title = f"Battery: {pct} ({power})"

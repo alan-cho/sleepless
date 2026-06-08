@@ -99,7 +99,7 @@ The menu shows what's happening; preferences persist.
 - **FR-004**: Automatically restore normal sleep on disable, on quit (via the reliable pre-quit hook), and best-effort on process termination.
 - **FR-005**: On launch, establish a known-safe baseline (restore normal sleep, start OFF).
 - **FR-006**: While on and **not confirmably charging**, restore normal sleep when charge < configurable floor (default 20%), checked each poll (default 60s). A **non-overridable hard floor** always reverts regardless of configuration.
-- **FR-007**: Auto-off timer (1h/2h/4h/indefinite); default is power-conditional (plugged→indefinite, battery→1h); overridable per session.
+- **FR-007**: Auto-off timer (1h/2h/4h/indefinite); default is power-conditional (plugged→indefinite, battery→1h); overridable per session. While enabled, the timer **re-arms on a power-source change** — plugging in clears the countdown (indefinite, on the auto default); unplugging starts the selected duration (default 1h).
 - **FR-008**: While on, restore normal sleep automatically when Low Power Mode is active.
 - **FR-009**: While on, restore normal sleep when thermal pressure ≥ Serious (configurable auto/warn/off), with **hysteresis** (re-enable only after returning to Nominal). **Critical** thermal always reverts regardless of configuration.
 - **FR-010**: Refuse to enable when a guardrail condition already holds, stating the reason. (Enable-time counterpart of the while-on revert guardrails FR-006/FR-008/FR-009 — same conditions, checked before enabling rather than during.)
