@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+# Sleepless pre-commit hook: deterministic spec drift guard.
+# Activate with: make hooks   (sets core.hooksPath to .githooks)
+# Bypass once with: git commit --no-verify
+set -euo pipefail
+ROOT="$(git rev-parse --show-toplevel)"
+exec python3 "${ROOT}/scripts/check_spec_sync.py"
