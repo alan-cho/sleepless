@@ -1,8 +1,8 @@
 # Implementation Plan: Sleepless — lid-closed keep-awake with safety guardrails
 
-**Branch**: `001-sleepless` | **Date**: 2026-06-08 (rev. post adversarial review) | **Spec**: [spec.md](./spec.md)
+**Feature**: `sleepless` | **Date**: 2026-06-08 (rev. post adversarial review) | **Spec**: [spec.md](./spec.md)
 
-**Input**: Feature specification from `specs/001-sleepless/spec.md`
+**Input**: Feature specification from `specs/sleepless/spec.md`
 
 ## Summary
 
@@ -57,7 +57,7 @@ sleepless/
 │   └── install.sh / uninstall.sh
 └── .github/workflows/ci.yml           # run tests on push
 ```
-Docs: `specs/001-sleepless/{plan,spec,research,data-model,quickstart}.md`, `contracts/`, `checklists/`.
+Docs: `specs/sleepless/{plan,spec,research,data-model,quickstart}.md`, `contracts/`, `checklists/`.
 
 **Structure Decision**: Single-file app (Constitution IV); testability via the pure-core/`SystemAdapter` split. Two small launchd plists (user agent + root reset daemon) are the lifecycle/safety backstop.
 
@@ -93,3 +93,66 @@ Key decisions and the review findings they close:
 | Addition | Why needed | Simpler alternative rejected because |
 |----------|------------|--------------------------------------|
 | Root boot LaunchDaemon | Only way to clear a stuck flag at boot / login-window / post-uninstall (SC-009, fail-safe) | App-only baseline can't run before GUI login or after uninstall → leaves a real stuck-awake window. Sanctioned in constitution v1.1.0; argv is a single fixed command. |
+
+## Menu-bar UX Redesign (revision — amends FR-003, FR-011; adds FR-021/022, SC-011/012)
+
+**Presentation only.** Manual-toggle behavior, guardrails, confirm-by-read, privilege, and the whole safety model are unchanged. No new `Config` fields (so the spec-drift BLOCKING hook stays green — note that hook inspects `Config` only, not `State`; "no new `State` field" is enforced by review + tests, not the hook). The Overview is derived from existing `State` + `Readings` + `Config`; `data-model.md` unchanged. **research.md D7 is amended in this change** (monochrome text glyph → template image) — not deferred.
+
+*Incorporates adversarial-review findings: rumps `icon` retina mechanism, py2app bundling, icon memoization, pure/impure split, full state matrix, and the user's UX calls (toggle at top; plain-text status; keep grayed rows; "Sleepless is On/Off" wording).*
+
+### A. Per-state template menu-bar icons (FR-003, SC-011)
+- **Assets**: `assets/icons/{off,ac,batt,alarm}.png` — single-file monochrome **template** PNGs (black + alpha; macOS tints for light/dark), rendered at **40×40 px**. No separate `@2x` file: rumps' `icon` setter forces a 20-pt logical size and does **not** auto-select `@2x` (verified, rumps 0.4.0 `_nsimage_from_file`), so one 40 px rep at 20 pt logical is crisp on retina (40 px backs 20 pt×2) and downscales cleanly on 1×.
+- **Generation** — `scripts/make_icons.py`, committed + deterministic, run on macOS only (output checked in, so CI/end-users need no AppKit). Per state: `AppKit.NSImage.imageWithSystemSymbolName:accessibilityDescription:` (check non-nil — R8), apply `NSImageSymbolConfiguration` (~16 pt), `setTemplate_(True)`, render centered onto a transparent 40×40 `NSBitmapImageRep`, write PNG via `representationUsingType_properties_` at **72 DPI** (so the 40 px → 20 pt logical mapping is exact). Symbol map: off→`moon.fill`, ac→`bolt.fill`, batt→`battery.50`, alarm→`exclamationmark.triangle.fill` (all confirmed to resolve on macOS 26).
+- **Load + memoize** — module-level `ICONS = {key: _asset("icons/<key>.png")}`. App constructs with `icon=ICONS["off"], template=True, title=None`; `template` is set **once** at construction (assigning it again triggers a full reload). `refresh()` computes `key = icon_for(st, r)` and, **only when the applied representation changes** (cache `self._icon_applied = ("icon"|"title", key)`), updates the status item — avoids a per-second disk read + NSImage alloc (the 1 Hz UI tick must not churn the status item).
+- **Fallback (must short-circuit before touching `self.icon`)** — rumps' icon setter does a bare `open(path)` and raises if the file is missing. So the view resolves `path = ICONS[key]` and checks `os.path.exists(path)` **first**: if present → `self.icon = path; self.title = None`; if missing → `self.title = GLYPHS[key]` and never assign `self.icon`. Always clear `title` when an icon is applied (rumps shows title *and* icon if both are set). The app never breaks over a missing PNG; `glyph_for` is retained as the text fallback.
+- **Bundle** — `setup.py` `OPTIONS` gains `"resources": ["assets/icons"]`; `_asset()` resolves via `sys.frozen`/`RESOURCEPATH` when bundled, else `os.path.dirname(os.path.abspath(__file__))` (never cwd — the LaunchAgent runs with cwd `/`).
+
+### B. Menu reorganization (FR-011, FR-021) — toggle at the top
+Top→bottom, native `rumps` menu. Order: **status → action → Overview detail → Settings ▸ → Quit** (action near the top, well separated from Quit — fixes the buried-action + quit-overshoot findings). Status + the four detail rows are `MenuItem(callback=None)` ⇒ disabled/grayed (kept by user choice). **Plain text, no glyphs/emoji** (the monochrome bar icon carries the symbol).
+
+```
+Sleepless is On — your Mac won't sleep (on power)     ← status (plain text; see matrix)
+Turn Off                                              ← action (Stay Awake / Turn Off / Turn Off (ALARM))
+──────────────
+Battery: 80%, charging
+Auto-off: in 0h58m
+Battery floor: 20%
+Thermal guard: Auto-revert
+──────────────
+Settings ▸  { Auto-off ▸ · Battery floor ▸ · Thermal guard ▸ }
+──────────────
+Quit (restores sleep)
+```
+
+`("Settings", [("Auto-off", [...]), ("Battery floor", [...]), ("Thermal guard", [...])])` — the three existing pickers nested one level (verified: rumps `parse_menu` recurses uncapped; reused `MenuItem` objects keep callbacks + `.state`, so `_sync_choice_checks` is unchanged).
+
+**`menu_overview` state matrix** (the testable contract — covers every combination):
+
+`menu_overview` **branches on `state.alarm` first** (before any timer math): alarm → fixed rows below, ignoring `awake_until` (which is intentionally left stale on the unconfirmed-revert path, `_apply_off` alarm branch). Otherwise it branches on `state.enabled`, then power.
+
+| Row | OFF | ON (power=True) | ON (power=False) | ON (power=None) | ALARM |
+|-----|-----|-----|-----|-----|-----|
+| status | `Sleepless is Off — your Mac will sleep` (+ ` (last: <reason>)`) | `Sleepless is On — your Mac won't sleep (on power)` | `… (on battery)` | `… (on battery — power source unknown)` | `Sleepless — alarm: your Mac may still be awake` |
+| action | `Stay Awake` | `Turn Off` | `Turn Off` | `Turn Off` | `Turn Off (ALARM)` |
+| battery | `Battery: 80%, on battery` (or `Battery: —` if % unknown; `, power source unknown` if power=None) | `Battery: 80%, charging` | `Battery: 80%, on battery` | `Battery: 80%, power source unknown` | from readings (same rules as OFF) |
+| auto-off | `Auto-off: Auto (by power)` (the configured choice, via the `TIMER_LABELS` reverse map of `timer_choice`) | `Auto-off: in 0h58m`; `Indefinite`; **`reverting…`** when `enabled and remaining==0` (expiry pending) | same | same | `Auto-off: —` |
+| floor | `Battery floor: 20%` | same | same | same | same |
+| thermal | `Thermal guard: Auto-revert` (+ ` · now Serious` only if pressure ≥ Serious) | same | same | same | same |
+
+Power source is `True→on power`, else (False/None)→treated as battery; `None` always adds "power source unknown" (one canonical phrase, used identically in status + battery) so it never falsely claims "on power" — the weak-charger case that silently arms the 1 h timer. The **`reverting…`** cell is a transient only observable on the async worker window (between a poll detecting expiry and `_apply_off` flipping `enabled=False`); it is tested by passing a hand-constructed `State(enabled=True, awake_until=now)` to the pure `menu_overview`, not via the sync controller path (which flips `enabled` inline). **The auto-off row re-arms on a power-source change at poll cadence (≤60s), not on the 1 Hz tick** (`_rearm_on_power_change` runs in `tick()`), so just after (un)plugging the countdown may lag up to one poll while the icon/status power suffix update within ~1s — documented, not a bug.
+
+### C. Pure, tested display logic (FR-022, SC-012)
+- New **module-level** pure functions (no `rumps`, no I/O, importable under pytest):
+  - `icon_for(state, readings) -> str` — returns a **logical key** `"off"|"ac"|"batt"|"alarm"` (NOT a path), so it's pure + testable; the impure path/exists/fallback resolution lives in the view. (`glyph_for` stays for the text fallback; both read from one source.)
+  - `menu_overview(state, readings, config, now) -> list[tuple[str, str]]` — ordered `(key, label)` rows per the matrix, **including** the status string and the action label, so the on/off/alarm/power wording is all in the tested layer.
+  - Move `THERMAL_NAMES` to a module-level constant (was on `SystemAdapter`) so `menu_overview` stays pure.
+- `SleeplessApp` becomes thin wiring: builds the disabled rows once; `refresh()` maps `menu_overview(state, r, cfg, self.controller._now())` labels onto them, sets the action title, and assigns the memoized icon. It passes the **controller's injected clock** (not a fresh `time.monotonic()`), so displayed countdown and tested timer math agree. The old `state_txt` / `toggle_item.title` / inline branching is **deleted** (no duplicate source of truth). Only this thin wiring stays `# pragma: no cover`; all display *logic* is covered → FR-022/SC-012 honestly met.
+- Tests: `menu_overview` for every matrix cell (off / on×{power,battery,none} / alarm; status + **action label** per state; last-revert annotation; `reverting…` at expiry via a hand-built `State`; thermal `· now Serious`; alarm rows fixed regardless of stale `awake_until`); `icon_for` key per state incl. `power_plugged is None → batt`; the missing-asset fallback decision (filesystem mocked).
+
+### Files
+`sleepless.py` (ICONS / `icon_for` / `menu_overview` / module-level `THERMAL_NAMES` + thin view rebuild with toggle-at-top + icon memoization), `scripts/make_icons.py` *(new)*, `assets/icons/*.png` *(new, committed)*, `tests/test_sleepless.py`, `setup.py` (`resources` + `_asset`), `Makefile` (`icons` target), `specs/sleepless/research.md` (amend D7).
+
+### Risks
+- **R6 — retina/template rendering**: resolved in plan (single 40 px template PNG at 20 pt logical via rumps `icon`); still eyeballed on-device in light + dark (SC-011); text-glyph fallback backs it.
+- **R7 — bundled asset path**: `setup.py resources` + `sys.frozen`/`RESOURCEPATH`-aware `_asset()`; the unbundled LaunchAgent (supported delivery, R1) uses the `__file__`-based branch.
+- **R8 — SF Symbol availability**: a symbol may be absent on older macOS; `make_icons.py` checks each `imageWithSystemSymbolName…` for nil and falls back to drawing the glyph shape; runtime falls back to text.

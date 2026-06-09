@@ -30,10 +30,10 @@ All decisions verified against environment probing on the target machine (Apple 
 - **Decision**: `percent` and `power_plugged`. Treat `None`/unavailable as "cannot confirm safe."
 - **Rationale**: Simple, dependency already mandated, no native code. Degrades safe if absent.
 
-## D7 — Monochrome glyphs
-- **Decision**: Text glyphs forced to monochrome with the U+FE0E variation selector, e.g. `"⏾︎"` (off), `"☀︎"` (awake/AC), `"▲︎"` (awake/battery), set via `self.title`.
-- **Rationale**: User chose monochrome; U+FE0E forces text (not emoji/color) presentation. All three live in the `GLYPHS` tunable for one-line tweaking.
-- **Alternatives**: Color emoji — rejected by user. Template NSImage icons — rejected: heavier, not "single-file tweakable."
+## D7 — Menu-bar icon (SUPERSEDED by the UX redesign — see plan.md "Menu-bar UX Redesign" / FR-003)
+- **Decision (current)**: Per-state **monochrome template image** icons (`assets/icons/{off,ac,batt,alarm}.png`, 40 px, `setTemplate_(True)`), generated deterministically from SF Symbols by `scripts/make_icons.py` and loaded via rumps `icon`/`template`. macOS tints them for light/dark and renders them at the standard menu-bar metric (the original text glyphs rendered too small next to native apps).
+- **Fallback**: if an icon asset is missing at runtime, fall back to the monochrome text glyph — so the `GLYPHS` tunable (and `glyph_for`) are retained.
+- **Superseded decision**: text glyphs forced monochrome via U+FE0E (`"⏾︎"`/`"☀︎"`/`"▲︎"`) set via `self.title`. Rejected because the glyph rendered visibly smaller/thinner than native menu-bar icons; template images fix the sizing while staying monochrome and still tweakable (one committed generator + a checked-in asset set).
 
 ## D8 — Packaging: py2app (with fallback)
 - **Decision**: `setup.py` with `argv_emulation: False`, `packages: ['rumps','psutil']`, `plist.LSUIElement: True`. Build `python3 setup.py py2app` (`-A` for dev alias mode).
