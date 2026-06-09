@@ -10,6 +10,7 @@ OPTIONS = {
         "CFBundleShortVersionString": "1.0.0",
     },
     "packages": ["rumps", "psutil"],
+    "resources": ["assets/icons"],
 }
 
 setup(
