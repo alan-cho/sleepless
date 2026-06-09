@@ -22,7 +22,7 @@ Validation: wrong-type/out-of-range → that field's default (logged). Unknown k
 - `THERMAL_REVERT = 2` (Serious), `THERMAL_CRITICAL = 3` — Critical always reverts even if `thermal_guard=="off"`; re-enable allowed only at `0` (Nominal)
 - `PMSET = "/usr/bin/pmset"`, `SUDO = "/usr/bin/sudo"`, `OSASCRIPT = "/usr/bin/osascript"` (absolute paths)
 
-## RuntimeState (in-memory)
+## RuntimeState (in-memory; `State` in `sleepless.py`)
 | Field | Type | Initial | Notes |
 |-------|------|---------|-------|
 | `enabled` | bool | `False` | Intended keep-awake (reconciled vs OS each poll). |
@@ -30,13 +30,15 @@ Validation: wrong-type/out-of-range → that field's default (logged). Unknown k
 | `timer_choice` | str | `"auto"` | `auto`\|`1h`\|`2h`\|`4h`\|`indefinite`. |
 | `alarm` | bool | `False` | True when a revert could not be confirmed (FR-017). |
 | `awaiting_nominal` | bool | `False` | Set after a thermal revert; blocks re-enable until thermal == Nominal (hysteresis). |
+| `thermal_warned` | bool | `False` | De-dupes `thermal_guard="warn"` notifications: notify once per Serious+ episode, reset on return to Nominal. |
 | `last_revert_reason` | str \| None | `None` | For menu + log + notification. |
 | `last_power_plugged` | bool \| None | `None` | Prior poll's power state; a change re-arms the auto-off timer (FR-007). |
 
-## SystemReadings (produced each poll by SystemAdapter)
+## SystemReadings (produced each poll by SystemAdapter; `Readings` in `sleepless.py`)
 | Field | Type | Meaning | If unavailable → |
 |-------|------|---------|------------------|
 | `sleep_disabled` | bool | Actual flag. **`SleepDisabled` line absent in `pmset -g` ⇒ `False` (confirmed off)**; `SleepDisabled 1` ⇒ True. | `False` |
+| `sleep_read_ok` | bool | `True` when the `pmset -g` read itself succeeded; `False` ⇒ the read failed (the tri-state). The post-revert confirm treats `False` as *unconfirmed* → stay/enter ALARM, never recover to OFF on it. | `False` |
 | `low_power_mode` | bool | `lowpowermode 1` in `pmset -g`. | `False` |
 | `thermal_state` | int | 0 Nominal…3 Critical (`NSProcessInfo.thermalState()`). | `0` |
 | `battery_percent` | float \| None | Charge %. | `None` |

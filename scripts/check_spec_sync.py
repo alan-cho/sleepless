@@ -4,10 +4,19 @@
 Two deterministic checks that keep specs/ honest with the code:
 
   1. BLOCKING - every field on the @dataclass Config in sleepless.py must be
-     documented somewhere under specs/. Adding a config field without
-     documenting it fails the check (and the commit).
+     documented somewhere under specs/. Config is the persisted, user-editable
+     config schema (~/.config/sleepless/config.json) - the program's one
+     external contract - so a field added there without a spec entry fails the
+     commit. Internal structures (State, Readings) are deliberately NOT guarded:
+     they are implementation detail, verified by behavior in the tests, not by
+     matching their names into specs/ (which would couple the spec to the
+     implementation). data-model.md may still document them as design notes;
+     this guard just won't block a commit over them.
   2. WARNING - if sleepless.py is staged but no specs/ file is, print a
      non-blocking reminder to consider a spec update.
+
+This guard is project-specific by design (Python AST, the Config class name,
+the specs/sleepless tree) - not a general framework.
 
 Run directly:  python3 scripts/check_spec_sync.py
 Run via make:  make spec-check
