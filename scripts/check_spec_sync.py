@@ -22,6 +22,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+SPEC_DIR = "specs/sleepless"
+
 
 def repo_root() -> Path:
     try:
@@ -91,7 +93,7 @@ def main() -> int:
         print("spec-check: FAIL - Config field(s) not documented under specs/:", file=sys.stderr)
         for field in undocumented:
             print(f"  - {field}", file=sys.stderr)
-        print("Document them in specs/001-sleepless/data-model.md and "
+        print(f"Document them in {SPEC_DIR}/data-model.md and "
               "contracts/config-schema.md, then re-stage. Bypass with --no-verify.",
               file=sys.stderr)
         status = 1
@@ -99,7 +101,7 @@ def main() -> int:
     staged = staged_files(root)
     if staged and "sleepless.py" in staged and not any(s.startswith("specs/") for s in staged):
         print("spec-check: WARNING - sleepless.py is staged but no specs/ file changed. "
-              "If behavior or requirements changed, update specs/001-sleepless/ "
+              f"If behavior or requirements changed, update {SPEC_DIR}/ "
               "(reminder only, not blocking).", file=sys.stderr)
 
     if status == 0:

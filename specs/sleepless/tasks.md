@@ -1,6 +1,6 @@
 # Tasks: Sleepless — lid-closed keep-awake with safety guardrails
 
-**Input**: Design documents from `specs/001-sleepless/` (plan.md, spec.md, research.md, data-model.md, contracts/, quickstart.md)
+**Input**: Design documents from `specs/sleepless/` (plan.md, spec.md, research.md, data-model.md, contracts/, quickstart.md)
 
 **Tests**: REQUIRED for this feature (Constitution V — ≥85% coverage of the decision core). Test tasks are included.
 
@@ -142,3 +142,34 @@ T023 tests/test_sleepless.py (US1 cases)
 - `[P]` = different files, no dependency. Most US tasks share `sleepless.py` ⇒ sequential by design (single-file constraint, Constitution IV).
 - Commit after each phase (only when the owner asks — global rule).
 - Every `set_disablesleep` is followed by a confirm read; success is never assumed.
+
+---
+
+## Phase 8: Menu-bar UX Redesign (revision — FR-003/011/021/022, SC-011/012)
+
+**Phases 1–7 above are the shipped build.** This phase is the presentation-only redesign: a per-state template-image menu-bar icon at native size, a reorganized menu (**status → action → Overview → Settings ▸ → Quit**), and extraction of the display logic into pure, tested functions. **No behavior/guardrail/privilege/Config changes.** Spec: FR-003, FR-011, FR-021, FR-022; SC-011, SC-012. Design: plan.md "Menu-bar UX Redesign". (research.md D7 already amended.)
+
+**Independent Test**: new unit tests for `icon_for`/`menu_overview` (SC-012) + the quickstart on-device checks (icon size in light/dark/retina, state-change ≤1s, menu order, off-state unmistakable, VoiceOver) (SC-011).
+
+- [ ] T041 [P] `scripts/make_icons.py` (committed, macOS-only generator): per state (off/ac/batt/alarm) build the SF Symbol via `NSImage.imageWithSystemSymbolName_accessibilityDescription_` (map off→`moon.fill`, ac→`bolt.fill`, batt→`battery.50`, alarm→`exclamationmark.triangle.fill`; **nil-check each** → fall back to drawing the existing glyph shape, R8), apply `NSImageSymbolConfiguration` (~16 pt), `setTemplate_(True)`, render centered onto a transparent **40×40** `NSBitmapImageRep`, write `assets/icons/<key>.png` at **72 DPI**. **AC**: running on macOS writes 4 template PNGs; each reloaded `NSImage` round-trips `isTemplate()==True`; pixel size 40×40.
+- [ ] T042 [P] Generate + **commit** `assets/icons/{off,ac,batt,alarm}.png` (run T041 on-device). **AC**: 4 monochrome+alpha PNGs committed under `assets/icons/`; prerequisite for FR-003 acceptance.
+- [ ] T043 [P] `Makefile` `icons` target (`$(PYTHON) scripts/make_icons.py`) and `setup.py` `OPTIONS["resources"] += ["assets/icons"]`. **AC**: `make icons` regenerates the assets; `make package` places `assets/icons/` under the bundle `Resources/`.
+- [ ] T044 Pure display logic in `sleepless.py` (module level, **outside** the `if rumps is not None:` guard): `icon_for(state, readings) -> "off"|"ac"|"batt"|"alarm"` (logical key; `power_plugged is None → batt`); `menu_overview(state, readings, config, now) -> list[tuple[str,str]]` per the plan matrix — **branch on `state.alarm` first** (fixed alarm rows: status="…may still be awake", action="Turn Off (ALARM)", auto-off="—", ignoring the intentionally-stale `awake_until`), else on `enabled`/power; status + action label + battery/auto-off/floor/thermal; `power=None`→canonical "power source unknown"; OFF auto-off via the `TIMER_LABELS` reverse map; `reverting…` when `enabled and remaining==0`; thermal `· now Serious` only at ≥Serious; move `THERMAL_NAMES` to a module-level constant. **AC**: pure (no rumps, no I/O), importable under pytest; depends on nothing else in Phase 8.
+- [ ] T045 [US4] View rewrite in `sleepless.py` `SleeplessApp` (depends on T044): rebuild `menu` in order **status → action → `separator` → battery/auto-off/floor/thermal (`callback=None`, disabled) → `separator` → `("Settings", [Auto-off, Battery floor, Thermal guard])` → `separator` → Quit**; `refresh()` maps `menu_overview(state, r, cfg, self.controller._now())` onto the disabled rows and sets the **action** item title; **delete** the old `state_txt` / `toggle_item.title` / inline `glyph_for` logic (no duplicate source of truth); `_sync_choice_checks` unchanged (pickers nested one level deeper, same objects). **AC**: menu renders in the new order, action at top and separated from Quit; picker checkmarks still sync.
+- [ ] T046 Icon load + fallback + memoize in `sleepless.py` (depends on T044, T042): add `_asset()` (resolve via `sys.frozen`/`RESOURCEPATH` bundled, else `os.path.dirname(os.path.abspath(__file__))` — never cwd) and `ICONS = {key: _asset("icons/<key>.png")}`; construct app `icon=ICONS["off"], template=True, title=None`, set `template` **once**; in `refresh()` compute `key=icon_for(...)`, and **only when the applied representation changes**: if `os.path.exists(ICONS[key])` → `self.icon = ICONS[key]; self.title = None`, else `self.title = GLYPHS[key]` (never assign a missing path — rumps' `open()` would raise). **AC**: no per-second image reload; missing asset degrades to text glyph without crashing; unbundled path resolves with cwd `/`.
+- [ ] T047 [P] Tests in `tests/test_sleepless.py` (depends on T044): `icon_for` key per state incl. `power_plugged is None → batt` and alarm; `menu_overview` for **every matrix cell** (off / on×{True,False,None} / alarm) asserting status + action label + battery/auto-off/floor/thermal strings; last-revert annotation; `reverting…` via a hand-built `State(enabled=True, awake_until=now)`; thermal `· now Serious`; missing-asset fallback decision (mock `os.path.exists`). Remove the blanket display-logic `# pragma: no cover` (keep only thin rumps wiring excluded). **AC**: tests pass; `make cov` ≥85% holds; display logic is covered (SC-012).
+- [ ] T048 On-device verification (quickstart): restart via `packaging/restart.sh`; confirm the icon matches native menu-bar size in **light + dark** and on retina (SC-011), flips per state within ~1s on (un)plug, the menu order is correct, OFF status reads "Sleepless is Off — your Mac will sleep", and VoiceOver announces the status row. Record results. **AC**: SC-011 met; off-state unmistakable (FR-021).
+- [ ] T049 [P] Update `specs/sleepless/quickstart.md` with the Phase-8 validation steps (icon light/dark/retina + state-change timing; menu order; off-state wording; VoiceOver). **AC**: quickstart documents how to validate FR-003/011/021 and SC-011.
+
+### Phase 8 — Dependencies & parallelism
+- **T041 → T042 → T043** (icon assets/bundling) and **T044** (pure logic) are independent tracks and can proceed in parallel.
+- **T045** and **T046** both edit `sleepless.py` ⇒ sequential, and both depend on **T044** (and T046 on T042 for the assets).
+- **T047** (tests, separate file) depends on **T044**; **T048** depends on T042+T045+T046; **T049** is independent docs.
+```text
+# Parallel tracks:
+T041 → T042 → T043        (scripts/, assets/, Makefile+setup.py)
+T044 → (T045 ; T046)      (sleepless.py, sequential within the file)
+T047                       (tests/test_sleepless.py, after T044)
+T049                       (quickstart.md, anytime)
+# Converge: T048 on-device verification last.
+```

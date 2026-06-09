@@ -13,14 +13,14 @@ overheat the machine — or be left stuck awake.
   every launch, confirms every change by reading the flag back (loud **ALARM** if it can't),
   and a tiny root daemon clears the flag at every boot.
 
-Full design lives in [`specs/001-sleepless/`](specs/001-sleepless/) (spec, plan, contracts,
+Full design lives in [`specs/sleepless/`](specs/sleepless/) (spec, plan, contracts,
 data model). Built with the spec-kit blueprint flow.
 
 ## Layout
 - `sleepless.py` — the app (single, well-commented file) · `tests/` — unit tests
 - `packaging/` — launchd plists + `install.sh` / `uninstall.sh`
 - `Makefile` — task runner (`make help`) · `setup.py` — py2app packaging
-- `specs/001-sleepless/` — design docs (spec, plan, contracts, …)
+- `specs/sleepless/` — design docs (spec, plan, contracts, …)
 
 ## Requirements
 - macOS (Apple Silicon), Python 3 (a python.org framework build recommended for the menu bar).
@@ -76,4 +76,4 @@ password — accepted because it is pinned to two exact argv strings (no broader
 power) and the only effect is sleep on/off, which the guardrails already bound. The binary
 is intentionally **not** digest-pinned (a macOS update would change the hash and silently
 break the safety revert). See [`packaging/`](packaging/) and
-[`contracts/privileged-commands.md`](specs/001-sleepless/contracts/privileged-commands.md).
+[`contracts/privileged-commands.md`](specs/sleepless/contracts/privileged-commands.md).

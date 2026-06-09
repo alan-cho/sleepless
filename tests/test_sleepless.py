@@ -1,3 +1,5 @@
+import pytest
+
 import sleepless as S
 
 
@@ -12,6 +14,8 @@ class FakeAdapter:
         self.plugged = True
         self.notifications = []
         self.set_calls = []
+        self.sleep_reads = 0
+        self.lpm_reads = 0
 
     def set_disablesleep(self, value, *, allow_prompt):
         self.set_calls.append((value, allow_prompt))
@@ -20,9 +24,11 @@ class FakeAdapter:
         return self.write_succeeds
 
     def read_sleep_disabled(self):
+        self.sleep_reads += 1
         return (self.read_ok, self.flag)
 
     def read_low_power_mode(self):
+        self.lpm_reads += 1
         return self.lpm
 
     def read_thermal_state(self):
@@ -472,3 +478,103 @@ def test_timer_no_rearm_without_power_change():
     c.tick()
     c.tick()
     assert c.state.awake_until is None
+
+
+def test_refresh_volatile_updates_display_without_pmset_reads():
+    c, a, _ = make_controller()
+    base = R(sleep_disabled=True, sleep_read_ok=True, low_power_mode=True,
+             thermal_state=0, battery_percent=80.0, power_plugged=True)
+    a.sleep_reads = a.lpm_reads = 0
+    a.percent, a.plugged, a.thermal = 42.0, False, 2
+    out = c.refresh_volatile(base)
+    assert (out.battery_percent, out.power_plugged, out.thermal_state) == (42.0, False, 2)
+    assert out.sleep_disabled is True and out.low_power_mode is True
+    assert a.sleep_reads == 0 and a.lpm_reads == 0
+
+
+def test_icon_for_keys():
+    assert S.icon_for(S.State(alarm=True), R()) == "alarm"
+    assert S.icon_for(S.State(enabled=False), R()) == "off"
+    assert S.icon_for(S.State(enabled=True), R(power_plugged=True)) == "ac"
+    assert S.icon_for(S.State(enabled=True), R(power_plugged=False)) == "batt"
+    assert S.icon_for(S.State(enabled=True), R(power_plugged=None)) == "batt"
+
+
+def test_every_icon_key_has_asset_path_and_glyph_fallback():
+    for key in ("off", "ac", "batt", "alarm"):
+        assert key in S.ICONS
+        assert key in S.GLYPHS
+
+
+def _ov(state, **rkw):
+    return dict(S.menu_overview(state, R(**rkw), cfg(), 1000.0))
+
+
+def test_menu_overview_off():
+    rows = _ov(S.State(enabled=False), battery_percent=80.0, power_plugged=False)
+    assert rows["status"] == "Sleepless is Off — your Mac will sleep"
+    assert rows["action"] == "Stay Awake"
+    assert rows["battery"] == "Battery: 80%, on battery"
+    assert rows["auto_off"] == "Auto-off: Auto (by power)"
+    assert rows["floor"] == "Battery floor: 20%"
+    assert rows["thermal"] == "Thermal guard: Auto-revert"
+
+
+def test_menu_overview_off_appends_last_revert_reason():
+    rows = _ov(S.State(enabled=False, last_revert_reason="battery floor"), power_plugged=False)
+    assert rows["status"].endswith("(last: battery floor)")
+
+
+def test_menu_overview_on_power_indefinite():
+    rows = _ov(S.State(enabled=True, awake_until=None), power_plugged=True)
+    assert rows["status"] == "Sleepless is On — your Mac won't sleep (on power)"
+    assert rows["action"] == "Turn Off"
+    assert rows["battery"] == "Battery: 80%, charging"
+    assert rows["auto_off"] == "Auto-off: Indefinite"
+
+
+def test_menu_overview_on_battery_countdown():
+    rows = _ov(S.State(enabled=True, awake_until=1000.0 + 3660), power_plugged=False)
+    assert rows["status"] == "Sleepless is On — your Mac won't sleep (on battery)"
+    assert rows["auto_off"] == "Auto-off: in 1h01m"
+
+
+def test_menu_overview_power_unknown_never_says_on_power():
+    rows = _ov(S.State(enabled=True, awake_until=None), power_plugged=None)
+    assert rows["status"] == "Sleepless is On — your Mac won't sleep (on battery — power source unknown)"
+    assert rows["battery"] == "Battery: 80%, power source unknown"
+
+
+def test_menu_overview_reverting_at_expiry():
+    rows = _ov(S.State(enabled=True, awake_until=1000.0), power_plugged=False)
+    assert rows["auto_off"] == "Auto-off: reverting…"
+
+
+def test_menu_overview_alarm_rows_ignore_stale_awake_until():
+    rows = _ov(S.State(alarm=True, enabled=False, awake_until=1000.0 + 3600), power_plugged=False)
+    assert rows["status"] == "Sleepless — alarm: your Mac may still be awake"
+    assert rows["action"] == "Turn Off (ALARM)"
+    assert rows["auto_off"] == "Auto-off: —"
+
+
+def test_menu_overview_thermal_annotation_only_when_pressured():
+    nominal = _ov(S.State(enabled=True, awake_until=None), power_plugged=True, thermal_state=0)
+    assert nominal["thermal"] == "Thermal guard: Auto-revert"
+    serious = _ov(S.State(enabled=True, awake_until=None), power_plugged=True, thermal_state=2)
+    assert serious["thermal"] == "Thermal guard: Auto-revert · now Serious"
+
+
+@pytest.mark.system
+def test_system_pmset_toggle_and_revert():
+    """Real-system smoke (skipped by default; run with `-m system`): actually flip
+    the macOS SleepDisabled flag via pmset and confirm by read-back, then revert.
+    Needs a Mac with passwordless sudo for `pmset -a disablesleep`."""
+    ad = S.SystemAdapter()
+    try:
+        assert ad.set_disablesleep(1, allow_prompt=False) is True
+        read_ok, disabled = ad.read_sleep_disabled()
+        assert read_ok and disabled is True
+    finally:
+        assert ad.set_disablesleep(0, allow_prompt=False) is True
+        read_ok, disabled = ad.read_sleep_disabled()
+        assert read_ok and disabled is False

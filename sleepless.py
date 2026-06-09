@@ -54,7 +54,7 @@ import subprocess
 import sys
 import threading
 import time
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, fields, replace
 from pathlib import Path
 from typing import Callable, Optional, Tuple
 
@@ -85,6 +85,21 @@ GLYPHS = {
     "alarm": "⚠" + _TEXT,  # ⚠  revert failed — Mac may still be awake
 }
 
+
+def _asset(relpath: str) -> str:
+    """Absolute path to a bundled asset. Works unbundled (next to this script)
+    and under py2app (Resources/, via RESOURCEPATH); never relies on the cwd
+    (the LaunchAgent runs with cwd '/')."""
+    if getattr(sys, "frozen", False):
+        base = os.environ.get("RESOURCEPATH") or os.path.dirname(os.path.abspath(__file__))
+    else:
+        base = os.path.dirname(os.path.abspath(__file__))
+    return os.path.join(base, relpath)
+
+
+ICONS = {k: _asset(os.path.join("assets", "icons", f"{k}.png"))
+         for k in ("off", "ac", "batt", "alarm")}
+
 # Auto-off durations, in seconds. None == indefinite (no timer).
 DURATIONS = {"1h": 3600, "2h": 7200, "4h": 14400, "indefinite": None}
 TIMER_LABELS = {  # menu label -> DURATIONS key (plus the power-based "auto")
@@ -100,6 +115,7 @@ THERMAL_LABELS = {"Auto-revert (Serious+)": "auto", "Warn only": "warn", "Off": 
 HARD_FLOOR = 5            # battery % the floor can never be configured below
 THERMAL_REVERT = 2        # NSProcessInfoThermalStateSerious
 THERMAL_CRITICAL = 3      # NSProcessInfoThermalStateCritical (always reverts)
+THERMAL_NAMES = {0: "Nominal", 1: "Fair", 2: "Serious", 3: "Critical"}
 POLL_MIN, POLL_MAX = 5, 60  # clamp range for poll_seconds (max 60 so reverts fire "within one poll")
 UI_REFRESH_SECONDS = 1      # menu/glyph re-render cadence (memory-only; readings stay cached)
 
@@ -341,18 +357,78 @@ def compute_remaining(awake_until: Optional[float], now: float) -> Optional[int]
     return max(0, int(awake_until - now))
 
 
-def glyph_for(state: "State", r: Readings) -> str:
+def icon_for(state: "State", r: Readings) -> str:
+    """Logical icon key for the current display state — pure, so the view maps it
+    to a template-image asset (or the text-glyph fallback) without any I/O here."""
     if state.alarm:
-        return GLYPHS["alarm"]
+        return "alarm"
     if not state.enabled:
-        return GLYPHS["off"]
-    return GLYPHS["ac"] if r.power_plugged is True else GLYPHS["batt"]
+        return "off"
+    return "ac" if r.power_plugged is True else "batt"
+
+
+def glyph_for(state: "State", r: Readings) -> str:
+    """Monochrome text glyph for a state — the fallback when an icon asset is
+    missing; one source of truth via icon_for."""
+    return GLYPHS[icon_for(state, r)]
 
 
 def format_remaining(secs: Optional[int]) -> str:
     if secs is None:
         return "Indefinite"
     return f"{secs // 3600}h{(secs % 3600) // 60:02d}m"
+
+
+def _power_word(power_plugged: Optional[bool]) -> str:
+    if power_plugged is True:
+        return "charging"
+    if power_plugged is None:
+        return "power source unknown"
+    return "on battery"
+
+
+def menu_overview(state: "State", r: Readings, cfg: Config, now: float) -> list:
+    """Ordered (key, label) rows for the status line, the toggle action, and the
+    read-only overview — derived purely from state/readings/config (no rumps, no
+    I/O), so it is unit-tested directly. Branches on the alarm sub-state first so
+    its intentionally-stale awake_until never leaks into the rows."""
+    pct = "—" if r.battery_percent is None else f"{int(r.battery_percent)}%"
+    battery = f"Battery: {pct}, {_power_word(r.power_plugged)}"
+    floor = f"Battery floor: {cfg.battery_floor_percent}%"
+    guard = {"auto": "Auto-revert", "warn": "Warn only", "off": "Off"}[cfg.thermal_guard]
+    thermal = f"Thermal guard: {guard}"
+    if r.thermal_state >= THERMAL_REVERT:
+        thermal += f" · now {THERMAL_NAMES.get(r.thermal_state, '?')}"
+
+    if state.alarm:
+        return [("status", "Sleepless — alarm: your Mac may still be awake"),
+                ("action", "Turn Off (ALARM)"), ("battery", battery),
+                ("auto_off", "Auto-off: —"), ("floor", floor), ("thermal", thermal)]
+
+    if not state.enabled:
+        status = "Sleepless is Off — your Mac will sleep"
+        if state.last_revert_reason:
+            status += f" (last: {state.last_revert_reason})"
+        choice = {v: k for k, v in TIMER_LABELS.items()}.get(state.timer_choice, state.timer_choice)
+        return [("status", status), ("action", "Stay Awake"), ("battery", battery),
+                ("auto_off", f"Auto-off: {choice}"), ("floor", floor), ("thermal", thermal)]
+
+    if r.power_plugged is True:
+        where = "on power"
+    elif r.power_plugged is None:
+        where = "on battery — power source unknown"
+    else:
+        where = "on battery"
+    remaining = compute_remaining(state.awake_until, now)
+    if remaining is None:
+        auto = "Auto-off: Indefinite"
+    elif remaining == 0:
+        auto = "Auto-off: reverting…"
+    else:
+        auto = f"Auto-off: in {format_remaining(remaining)}"
+    return [("status", f"Sleepless is On — your Mac won't sleep ({where})"),
+            ("action", "Turn Off"), ("battery", battery),
+            ("auto_off", auto), ("floor", floor), ("thermal", thermal)]
 
 
 # ============================================================================
@@ -376,8 +452,6 @@ class State:
 # ============================================================================
 
 class SystemAdapter:
-    THERMAL_NAMES = {0: "Nominal", 1: "Fair", 2: "Serious", 3: "Critical"}
-
     def set_disablesleep(self, value: int, *, allow_prompt: bool) -> bool:
         """Run exactly `pmset -a disablesleep {0,1}` as root. Tries passwordless
         sudo first; only the interactive enable path may fall back to a GUI
@@ -482,6 +556,16 @@ class Controller:
         thermal = self.adapter.read_thermal_state()
         pct, plugged = self.adapter.read_battery()
         return Readings(disabled, ok, lpm, thermal, pct, plugged)
+
+    def refresh_volatile(self, readings: Readings) -> Readings:
+        """Cheap, subprocess-free re-read of the display-volatile fields (battery,
+        power source, thermal) so the 1s UI tick reflects a power change within
+        ~1s; the pmset-derived fields (sleep_disabled, low_power_mode) carry over
+        from the last poll, since they spawn a subprocess and aren't second-by-
+        second display state."""
+        pct, plugged = self.adapter.read_battery()
+        return replace(readings, battery_percent=pct, power_plugged=plugged,
+                       thermal_state=self.adapter.read_thermal_state())
 
     # --- privileged writes (confirmed) ---
     def _perform(self, value: int, *, allow_prompt: bool) -> bool:
@@ -676,12 +760,15 @@ if rumps is not None:  # pragma: no cover
             super().__init__(APP_NAME, title=GLYPHS["off"], quit_button=None)
             self.controller = controller
             self._readings = None
+            self._icon_applied = None
+            self.template = True
 
+            self.status_item = rumps.MenuItem("Sleepless")
             self.toggle_item = rumps.MenuItem("Stay Awake", callback=self.on_toggle)
             self.info_battery = rumps.MenuItem("Battery: …")
-            self.info_timer = rumps.MenuItem("Auto-off: —")
-            self.info_thermal = rumps.MenuItem("Thermal: …")
-            self.info_state = rumps.MenuItem("State: off")
+            self.info_timer = rumps.MenuItem("Auto-off: …")
+            self.info_floor = rumps.MenuItem("Battery floor: …")
+            self.info_thermal = rumps.MenuItem("Thermal guard: …")
 
             self._timer_items = {label: rumps.MenuItem(label, callback=self.on_pick_timer)
                                  for label in TIMER_LABELS}
@@ -691,13 +778,16 @@ if rumps is not None:  # pragma: no cover
                                    for label in THERMAL_LABELS}
 
             self.menu = [
+                self.status_item,
                 self.toggle_item,
                 rumps.separator,
-                self.info_battery, self.info_timer, self.info_thermal, self.info_state,
+                self.info_battery, self.info_timer, self.info_floor, self.info_thermal,
                 rumps.separator,
-                ("Auto-off", list(self._timer_items.values())),
-                ("Battery floor", list(self._floor_items.values())),
-                ("Thermal guard", list(self._thermal_items.values())),
+                ("Settings", [
+                    ("Auto-off", list(self._timer_items.values())),
+                    ("Battery floor", list(self._floor_items.values())),
+                    ("Thermal guard", list(self._thermal_items.values())),
+                ]),
                 rumps.separator,
                 rumps.MenuItem("Quit (restores sleep)", callback=self.on_quit, key="q"),
             ]
@@ -739,6 +829,8 @@ if rumps is not None:  # pragma: no cover
             self.refresh()
 
         def on_ui_refresh(self, _timer):
+            if self._readings is not None:
+                self._readings = self.controller.refresh_volatile(self._readings)
             self.refresh()
 
         def on_quit(self, _sender):
@@ -751,30 +843,31 @@ if rumps is not None:  # pragma: no cover
                 self._readings = self.controller.readings()
             r = self._readings
             st = self.controller.state
-            self.title = glyph_for(st, r)
-            if st.alarm:
-                self.toggle_item.title = "Turn Off (ALARM)"
-            elif st.enabled:
-                self.toggle_item.title = "Turn Off"
+            self._apply_icon(icon_for(st, r))
+            rows = dict(menu_overview(st, r, self.controller.config, self.controller._now()))
+            self.toggle_item.title = rows["action"]
+            self.status_item.title = rows["status"]
+            self.info_battery.title = rows["battery"]
+            self.info_timer.title = rows["auto_off"]
+            self.info_floor.title = rows["floor"]
+            self.info_thermal.title = rows["thermal"]
+
+        def _apply_icon(self, key: str) -> None:
+            """Set the menu-bar image to the template icon for `key`, or fall back
+            to the text glyph if the asset is missing. Memoized on the applied
+            representation so the 1 Hz refresh never re-loads the image."""
+            path = ICONS.get(key)
+            use_icon = bool(path) and os.path.exists(path)
+            applied = ("icon" if use_icon else "title", key)
+            if applied == self._icon_applied:
+                return
+            if use_icon:
+                self.icon = path
+                self.title = None
             else:
-                self.toggle_item.title = "Stay Awake"
-            pct = "—" if r.battery_percent is None else f"{int(r.battery_percent)}%"
-            power = "charging" if r.power_plugged is True else "on battery"
-            self.info_battery.title = f"Battery: {pct} ({power})"
-            remaining = compute_remaining(st.awake_until, self.controller._now())
-            self.info_timer.title = ("Auto-off: " + (format_remaining(remaining)
-                                     if st.enabled else "—"))
-            self.info_thermal.title = "Thermal: " + SystemAdapter.THERMAL_NAMES.get(
-                r.thermal_state, "?")
-            if st.alarm:
-                state_txt = "ALARM — may still be awake"
-            elif st.enabled:
-                state_txt = "awake (on power)" if r.power_plugged is True else "awake (on battery)"
-            else:
-                state_txt = "off"
-                if st.last_revert_reason:
-                    state_txt += f"  (last: {st.last_revert_reason})"
-            self.info_state.title = "State: " + state_txt
+                self.icon = None
+                self.title = GLYPHS[key]
+            self._icon_applied = applied
 
         def _sync_choice_checks(self):
             chosen_timer = next(l for l, k in TIMER_LABELS.items()

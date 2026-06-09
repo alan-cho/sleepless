@@ -1,6 +1,10 @@
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
+addopts = "-m 'not system'"
+markers = [
+    "system: real-system smoke that invokes pmset (needs sudo); run with `-m system`",
+]
 
 [tool.coverage.run]
 source = ["sleepless"]

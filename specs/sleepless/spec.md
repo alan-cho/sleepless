@@ -1,8 +1,8 @@
 # Feature Specification: Sleepless — lid-closed keep-awake with safety guardrails
 
-**Feature Branch**: `001-sleepless`
+**Feature**: `sleepless`
 
-**Created**: 2026-06-08 · **Revised**: 2026-06-08 (post adversarial review)
+**Created**: 2026-06-08 · **Revised**: 2026-06-08 (post adversarial review; menu-bar UX redesign)
 
 **Status**: Draft
 
@@ -72,9 +72,10 @@ The menu shows what's happening; preferences persist.
 
 **Acceptance Scenarios**:
 
-1. **Given** the app is running, **When** the owner opens the menu, **Then** it shows battery % + charging state, remaining auto-off (or "Indefinite"), current state, and the last revert reason.
+1. **Given** the app is running, **When** the owner opens the menu, **Then** it presents — top to bottom — a plain-language status line, the Stay Awake / Turn Off action, an Overview summary (battery / auto-off / battery floor / thermal guard / last revert reason), a Settings submenu (Auto-off / Battery floor / Thermal guard), and Quit — with the action near the top and separated from Quit.
 2. **Given** the owner changes the floor or auto-off, **When** restarted, **Then** the settings persist.
-3. **Given** any state, **When** the owner looks at the menu bar, **Then** the glyph distinguishes off / awake-on-power / awake-on-battery, plus a distinct **alarm** glyph if a revert failed.
+3. **Given** any state, **When** the owner looks at the menu bar, **Then** the icon distinguishes off / awake-on-power / awake-on-battery, plus a distinct **alarm** icon if a revert failed, at the standard menu-bar size.
+4. **Given** Sleepless is off, **When** the owner opens the menu, **Then** the status line reads "Sleepless is Off — your Mac will sleep" — off is not mistakable for on.
 
 ---
 
@@ -95,7 +96,7 @@ The menu shows what's happening; preferences persist.
 
 - **FR-001**: Menu-bar-only presence — no Dock icon, no main window.
 - **FR-002**: Toggle "Stay Awake" mode that prevents sleep even with the lid closed.
-- **FR-003**: The glyph reflects state with monochrome symbols: off / awake-on-power / awake-on-battery, plus a distinct **alarm** glyph when a revert could not be confirmed.
+- **FR-003**: The menu-bar icon reflects state — off / awake-on-power / awake-on-battery / **alarm** (revert unconfirmed) — as a per-state **template image** rendered at the standard macOS menu-bar size and auto-adapting to light/dark menu bars. Icons are generated deterministically from a committed source so sizing is consistent with native menu-bar apps.
 - **FR-004**: Automatically restore normal sleep on disable, on quit (via the reliable pre-quit hook), and best-effort on process termination.
 - **FR-005**: On launch, establish a known-safe baseline (restore normal sleep, start OFF).
 - **FR-006**: While on and **not confirmably charging**, restore normal sleep when charge < configurable floor (default 20%), checked each poll (default 60s). A **non-overridable hard floor** always reverts regardless of configuration.
@@ -103,7 +104,7 @@ The menu shows what's happening; preferences persist.
 - **FR-008**: While on, restore normal sleep automatically when Low Power Mode is active.
 - **FR-009**: While on, restore normal sleep when thermal pressure ≥ Serious (configurable auto/warn/off), with **hysteresis** (re-enable only after returning to Nominal). **Critical** thermal always reverts regardless of configuration.
 - **FR-010**: Refuse to enable when a guardrail condition already holds, stating the reason. (Enable-time counterpart of the while-on revert guardrails FR-006/FR-008/FR-009 — same conditions, checked before enabling rather than during.)
-- **FR-011**: The menu shows battery % + charging state, remaining auto-off (or "Indefinite"), current state, and last revert reason.
+- **FR-011**: The menu is organized top-to-bottom as: (1) a one-line plain-language **status** (FR-021); (2) the **action** — labeled "Stay Awake" when off, "Turn Off" when on, "Turn Off (ALARM)" in alarm; (3) an **Overview** read-only summary (battery % + charging state; auto-off remaining or, when off, the configured choice; battery floor; thermal guard; last revert reason); (4) a **Settings** submenu consolidating Auto-off, Battery floor, and Thermal guard; (5) **Quit**. The primary action sits near the top (right after the status) and is separated from Quit so an overshoot cannot quit the app.
 - **FR-012**: Persist settings in a user-scoped JSON file with safe defaults; validate/clamp on load; handle corruption (back up the bad file, use defaults); restrictive file permissions.
 - **FR-013**: On each poll, reconcile displayed state with the actual OS sleep setting (absence of the flag ⇒ off).
 - **FR-014**: On each automatic revert, notify (best-effort) **and** append a durable timestamped entry to an event log; the glyph + log are the authoritative record.
@@ -113,6 +114,8 @@ The menu shows what's happening; preferences persist.
 - **FR-018**: A boot-time privileged safety daemon forces normal sleep at every system startup (closes the abnormal-exit / login-window / post-uninstall window).
 - **FR-019**: Only one UI instance runs at a time (single-instance guard).
 - **FR-020**: A documented uninstall restores normal sleep and removes the privileged components (sudoers entry, LaunchAgent, boot daemon).
+- **FR-021**: The status line MUST make the current state unmistakable in plain language, using the app name and **no icon/emoji in the text** (the menu-bar icon carries the symbol): off → "Sleepless is Off — your Mac will sleep"; on → "Sleepless is On — your Mac won't sleep" plus the power source; alarm → "Sleepless — alarm: your Mac may still be awake". When the power source is unknown (`power_plugged` is None / plugged-but-not-charging), it MUST NOT claim "on power" — that state is treated as battery.
+- **FR-022**: The icon-per-state mapping and the Overview rows (content + visibility) MUST be produced by pure functions independent of the UI framework, so they are unit-tested directly — display logic is not exempted from coverage.
 
 ### Key Entities
 
@@ -137,6 +140,8 @@ The menu shows what's happening; preferences persist.
 - **SC-008**: With passwordless privilege configured, enabling requires zero password prompts and all unattended auto-reverts complete without any prompt.
 - **SC-009**: On every boot, the root daemon clears the disable-sleep flag at startup, ordered as early as launchd permits (and retried if the one-shot is late or fails); the residual pre-clear window is bounded to early boot, not a full session. Verified per quickstart §2 (set the flag, reboot, confirm it is cleared).
 - **SC-010**: A privileged revert that cannot be confirmed produces a persistent alarm state + log entry; the app never displays "off" while the flag is actually on.
+- **SC-011**: The menu-bar icon renders at the standard menu-bar metric (visually consistent with native menu-bar apps) and correctly in both light and dark menu bars, and reflects the latest evaluated state within one UI refresh of that state changing — power-source changes within ~1s, while guardrail-driven on/off/alarm changes land at poll cadence (≤60s, per SC-003/004/005).
+- **SC-012**: The icon-per-state and Overview-row logic is covered by direct unit tests; no blanket coverage exclusion remains on display logic.
 
 ## Assumptions
 

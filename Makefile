@@ -1,7 +1,7 @@
 # Sleepless — common tasks. Run `make` or `make help` for the list.
 PYTHON ?= python3
 
-.PHONY: help run deps dev-deps test cov spec-check hooks package install restart uninstall clean
+.PHONY: help run deps dev-deps test cov spec-check hooks icons package install restart uninstall clean
 
 help: ## Show this help
 	@grep -E '^[a-z-]+:.*##' $(MAKEFILE_LIST) | sed -E 's/:.*## /\t/' | sort
@@ -27,6 +27,9 @@ spec-check: ## Verify the spec documents every Config field (drift guard)
 hooks: ## Activate the git pre-commit spec-drift hook (.githooks)
 	git config core.hooksPath .githooks
 	@echo "pre-commit spec-drift hook active. Bypass once with: git commit --no-verify"
+
+icons: ## Regenerate the menu-bar template icons from SF Symbols (macOS)
+	$(PYTHON) scripts/make_icons.py
 
 package: ## Build the standalone .app (py2app)
 	$(PYTHON) setup.py py2app
